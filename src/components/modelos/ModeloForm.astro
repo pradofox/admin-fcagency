@@ -1,0 +1,121 @@
+---
+interface Modelo {
+  id?: string;
+  nombre?: string;
+  email?: string | null;
+  whatsapp?: string | null;
+  instagram?: string | null;
+  cumpleanos?: string | null;
+  genero?: string | null;
+  estatura_cm?: number | null;
+  busto_cm?: number | null;
+  cintura_cm?: number | null;
+  cadera_cm?: number | null;
+  calzado_mx?: number | null;
+  cabello?: string | null;
+  ojos?: string | null;
+  ciudad?: string | null;
+  notas?: string | null;
+  estado?: string;
+}
+
+interface Props {
+  modelo?: Modelo;
+  action: string;
+  method?: 'POST' | 'PATCH';
+  submitLabel: string;
+}
+
+const { modelo = {}, action, method = 'POST', submitLabel } = Astro.props;
+const isEdit = method === 'PATCH';
+---
+
+<form method={isEdit ? 'POST' : 'POST'} action={action} id="modelo-form">
+  {isEdit && <input type="hidden" name="_method" value="PATCH" />}
+
+  <label class="label">Nombre completo *</label>
+  <input class="input" name="nombre" value={modelo.nombre ?? ''} required />
+
+  <div class="row">
+    <div class="col">
+      <label class="label">Email</label>
+      <input class="input" name="email" type="email" value={modelo.email ?? ''} />
+    </div>
+    <div class="col">
+      <label class="label">WhatsApp</label>
+      <input class="input" name="whatsapp" value={modelo.whatsapp ?? ''} />
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="col">
+      <label class="label">Instagram</label>
+      <input class="input" name="instagram" value={modelo.instagram ?? ''} placeholder="usuario" />
+    </div>
+    <div class="col">
+      <label class="label">Cumpleaños</label>
+      <input class="input" name="cumpleanos" type="date" value={modelo.cumpleanos ?? ''} />
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="col">
+      <label class="label">Género</label>
+      <input class="input" name="genero" value={modelo.genero ?? ''} />
+    </div>
+    <div class="col">
+      <label class="label">Ciudad</label>
+      <input class="input" name="ciudad" value={modelo.ciudad ?? ''} />
+    </div>
+  </div>
+
+  <label class="label" style="margin-top:28px">Medidas</label>
+  <div class="row">
+    <div class="col">
+      <label class="label">Estatura (cm)</label>
+      <input class="input" name="estatura_cm" type="number" value={modelo.estatura_cm ?? ''} />
+    </div>
+    <div class="col">
+      <label class="label">Busto (cm)</label>
+      <input class="input" name="busto_cm" type="number" value={modelo.busto_cm ?? ''} />
+    </div>
+    <div class="col">
+      <label class="label">Cintura (cm)</label>
+      <input class="input" name="cintura_cm" type="number" value={modelo.cintura_cm ?? ''} />
+    </div>
+    <div class="col">
+      <label class="label">Cadera (cm)</label>
+      <input class="input" name="cadera_cm" type="number" value={modelo.cadera_cm ?? ''} />
+    </div>
+    <div class="col">
+      <label class="label">Calzado MX</label>
+      <input class="input" name="calzado_mx" type="number" step="0.5" value={modelo.calzado_mx ?? ''} />
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="col">
+      <label class="label">Cabello</label>
+      <input class="input" name="cabello" value={modelo.cabello ?? ''} />
+    </div>
+    <div class="col">
+      <label class="label">Ojos</label>
+      <input class="input" name="ojos" value={modelo.ojos ?? ''} />
+    </div>
+  </div>
+
+  <label class="label">Estado</label>
+  <select class="select" name="estado">
+    {['activo', 'pausa', 'archivado', 'aspirante'].map((e) => (
+      <option value={e} selected={(modelo.estado ?? 'activo') === e}>{e}</option>
+    ))}
+  </select>
+
+  <label class="label">Notas</label>
+  <textarea class="textarea" name="notas">{modelo.notas ?? ''}</textarea>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{submitLabel}</button>
+    <a href="/modelos" class="btn">Cancelar</a>
+  </div>
+</form>

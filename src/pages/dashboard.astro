@@ -1,0 +1,49 @@
+---
+import Layout from '../components/Layout.astro';
+import { requireUser } from '../lib/session';
+import { getDB } from '../lib/db';
+
+const user = requireUser(Astro);
+const db = getDB(Astro);
+
+const modelosCount = await db
+  .prepare("SELECT COUNT(*) as c FROM modelos WHERE estado = 'activo'")
+  .first<{ c: number }>();
+const produccionesCount = await db
+  .prepare("SELECT COUNT(*) as c FROM producciones WHERE estado IN ('planeacion','confirmada','en_curso')")
+  .first<{ c: number }>();
+const briefsCount = await db
+  .prepare("SELECT COUNT(*) as c FROM briefs WHERE estado IN ('idea','aprobado','produccion')")
+  .first<{ c: number }>();
+const contactosCount = await db.prepare('SELECT COUNT(*) as c FROM contactos').first<{ c: number }>();
+---
+
+<Layout title="Dashboard" pageTitle="Dashboard">
+  <div class="page-head">
+    <h1>Hola, {user.nombre.split(' ')[0]}</h1>
+  </div>
+
+  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr))">
+    <a href="/modelos" class="card" style="display:block;color:inherit">
+      <div class="card-title">{modelosCount?.c ?? 0}</div>
+      <div class="card-meta">Modelos activas</div>
+    </a>
+    <a href="/producciones" class="card" style="display:block;color:inherit">
+      <div class="card-title">{produccionesCount?.c ?? 0}</div>
+      <div class="card-meta">Producciones en curso</div>
+    </a>
+    <a href="/briefs" class="card" style="display:block;color:inherit">
+      <div class="card-title">{briefsCount?.c ?? 0}</div>
+      <div class="card-meta">Briefs vivos</div>
+    </a>
+    <a href="/contactos" class="card" style="display:block;color:inherit">
+      <div class="card-title">{contactosCount?.c ?? 0}</div>
+      <div class="card-meta">Contactos totales</div>
+    </a>
+  </div>
+
+  <div class="mt-24">
+    <h2>Próximamente</h2>
+    <p class="text-muted">Métricas por marca, calendario integrado, alertas de cumpleaños de modelos, briefs por publicar esta semana.</p>
+  </div>
+</Layout>

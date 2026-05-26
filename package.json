@@ -1,0 +1,19 @@
+{
+  "name": "admin-fcagency",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "db:migrate:local": "for f in migrations/*.sql; do wrangler d1 execute fc-admin --local --file=$f; done",
+    "db:migrate:prod": "for f in migrations/*.sql; do wrangler d1 execute fc-admin --remote --file=$f; done",
+    "seed:admin": "node scripts/seed-admin.mjs"
+  },
+  "dependencies": {
+    "astro": "^4.16.0",
+    "@astrojs/cloudflare": "^11.0.0",
+    "nanoid": "^5.0.0"
+  }
+}

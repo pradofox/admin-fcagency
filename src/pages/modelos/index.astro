@@ -1,0 +1,44 @@
+---
+import Layout from '../../components/Layout.astro';
+import ModeloCard from '../../components/modelos/ModeloCard.astro';
+import EmptyState from '../../components/EmptyState.astro';
+import { requireUser } from '../../lib/session';
+import { getDB } from '../../lib/db';
+
+requireUser(Astro);
+const db = getDB(Astro);
+
+const filtroEstado = Astro.url.searchParams.get('estado') ?? 'activo';
+const filtros = ['activo', 'pausa', 'aspirante', 'archivado'];
+
+const { results } = await db
+  .prepare(
+    'SELECT id, nombre, ciudad, instagram, estado FROM modelos WHERE estado = ? ORDER BY nombre ASC LIMIT 200'
+  )
+  .bind(filtroEstado)
+  .all<{ id: string; nombre: string; ciudad: string | null; instagram: string | null; estado: string }>();
+---
+
+<Layout title="Modelos" pageTitle="Modelos">
+  <div class="page-head">
+    <h1>Modelos</h1>
+    <a href="/modelos/nuevo" class="btn btn-primary">+ Nueva</a>
+  </div>
+
+  <div class="filters">
+    {filtros.map((f) => (
+      <a href={`/modelos?estado=${f}`} class={`filter-chip ${filtroEstado === f ? 'active' : ''}`}>{f}</a>
+    ))}
+  </div>
+
+  {results && results.length > 0 ? (
+    <div class="grid">
+      {results.map((m) => <ModeloCard modelo={m} />)}
+    </div>
+  ) : (
+    <EmptyState
+      title="Sin modelos en este estado"
+      message={`No hay modelos con estado "${filtroEstado}". Da de alta una nueva o cambia el filtro.`}
+    />
+  )}
+</Layout>

@@ -1,0 +1,14 @@
+---
+import Layout from '../../components/Layout.astro';
+import EmptyState from '../../components/EmptyState.astro';
+import { requireUser } from '../../lib/session';
+requireUser(Astro);
+---
+
+<Layout title="Contactos" pageTitle="Contactos">
+  <div class="page-head"><h1>Contactos</h1></div>
+  <EmptyState
+    title="Próximamente"
+    message="Esta sección se construye en la Fase 2. CRM cross-marca con flujos por tipo (cliente, modelo, proveedor, aspirante, colaborador) y paso actual del lead."
+  />
+</Layout>

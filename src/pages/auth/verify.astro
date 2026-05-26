@@ -1,0 +1,26 @@
+---
+import { consumeTokenAndCreateSession, buildSessionCookie } from '../../lib/auth';
+import { getDB } from '../../lib/db';
+
+const token = Astro.url.searchParams.get('token');
+if (!token) {
+  return Astro.redirect('/login?error=invalid');
+}
+
+const db = getDB(Astro);
+const sessionId = await consumeTokenAndCreateSession(db, token);
+if (!sessionId) {
+  return Astro.redirect('/login?error=expired');
+}
+
+const isProd = Astro.url.protocol === 'https:';
+Astro.cookies.set('fc_session', sessionId, {
+  path: '/',
+  httpOnly: true,
+  sameSite: 'lax',
+  secure: isProd,
+  maxAge: 30 * 24 * 60 * 60
+});
+
+return Astro.redirect('/dashboard');
+---

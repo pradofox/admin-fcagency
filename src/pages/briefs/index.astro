@@ -1,0 +1,14 @@
+---
+import Layout from '../../components/Layout.astro';
+import EmptyState from '../../components/EmptyState.astro';
+import { requireUser } from '../../lib/session';
+requireUser(Astro);
+---
+
+<Layout title="Briefs" pageTitle="Briefs">
+  <div class="page-head"><h1>Briefs</h1></div>
+  <EmptyState
+    title="Próximamente"
+    message="Esta sección se construye en la Fase 2. Migra el flujo de Andrea desde fcagency-brand-content.netlify.app. Briefs por marca, calendario de publicaciones, conexión con piezas de contenido."
+  />
+</Layout>

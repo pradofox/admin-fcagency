@@ -1,0 +1,8 @@
+---
+const { title, message } = Astro.props as { title: string; message?: string };
+---
+
+<div class="empty">
+  <div class="empty-title">{title}</div>
+  {message && <div class="empty-msg">{message}</div>}
+</div>

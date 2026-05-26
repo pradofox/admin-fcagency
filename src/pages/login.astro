@@ -1,0 +1,45 @@
+---
+import '../styles/global.css';
+
+const error = Astro.url.searchParams.get('error');
+const errorMsg: Record<string, string> = {
+  invalid: 'El link es inválido o ya se usó. Pide uno nuevo.',
+  expired: 'El link ya expiró. Pide uno nuevo.',
+  noaccess: 'Este email no tiene acceso a la plataforma.'
+};
+---
+
+<!DOCTYPE html>
+<html lang="es-MX">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Entrar — admin.fcagency.mx</title>
+  </head>
+  <body>
+    <div class="auth-shell">
+      <div class="auth-box">
+        <div class="auth-brand">FC AGENCY</div>
+        <div class="auth-sub">admin · acceso</div>
+
+        {error && errorMsg[error] && (
+          <p class="text-danger" style="font-size:13px;margin-bottom:20px">{errorMsg[error]}</p>
+        )}
+
+        <form method="POST" action="/api/auth/login">
+          <label class="label">Tu email</label>
+          <input class="input" type="email" name="email" required autofocus placeholder="tu@email.com" />
+          <div class="form-actions" style="border-top:0;padding-top:0;margin-top:24px">
+            <button type="submit" class="btn btn-primary" style="width:100%">Enviar link de acceso</button>
+          </div>
+        </form>
+
+        <p style="font-size:11px;color:var(--text-3);text-align:center;margin-top:28px;letter-spacing:0.1em">
+          Te mandamos un link al correo. Sin contraseñas.
+        </p>
+      </div>
+    </div>
+  </body>
+</html>

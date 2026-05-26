@@ -1,0 +1,14 @@
+name = "admin-fcagency"
+main = "./dist/_worker.js/index.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+assets = { directory = "./dist", binding = "ASSETS" }
+
+[[d1_databases]]
+binding = "DB"
+database_name = "fc-admin"
+database_id = "REEMPLAZAR_DESPUES_DE_CREAR_D1"
+
+[vars]
+APP_URL = "http://localhost:4321"
+# RESEND_API_KEY se configura como secret en producción

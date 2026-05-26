@@ -1,0 +1,14 @@
+---
+import Layout from '../../components/Layout.astro';
+import EmptyState from '../../components/EmptyState.astro';
+import { requireUser } from '../../lib/session';
+requireUser(Astro);
+---
+
+<Layout title="Contenido" pageTitle="Contenido">
+  <div class="page-head"><h1>Contenido</h1></div>
+  <EmptyState
+    title="Próximamente"
+    message="Esta sección se construye en la Fase 2. Piezas de contenido derivadas de briefs, calendario por marca, plataforma de publicación, estado de cada pieza."
+  />
+</Layout>

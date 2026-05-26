@@ -1,0 +1,30 @@
+---
+import Sidebar from './Sidebar.astro';
+import Header from './Header.astro';
+import '../styles/global.css';
+
+const { title, pageTitle } = Astro.props as { title?: string; pageTitle?: string };
+const fullTitle = title ? `${title} — admin.fcagency.mx` : 'admin.fcagency.mx';
+---
+
+<!DOCTYPE html>
+<html lang="es-MX">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>{fullTitle}</title>
+  </head>
+  <body>
+    <div class="app">
+      <Sidebar />
+      <div class="main">
+        <Header title={pageTitle ?? title} />
+        <main class="content">
+          <slot />
+        </main>
+      </div>
+    </div>
+  </body>
+</html>

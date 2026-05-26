@@ -1,0 +1,14 @@
+---
+import Layout from '../../components/Layout.astro';
+import EmptyState from '../../components/EmptyState.astro';
+import { requireUser } from '../../lib/session';
+requireUser(Astro);
+---
+
+<Layout title="Producciones" pageTitle="Producciones">
+  <div class="page-head"><h1>Producciones</h1></div>
+  <EmptyState
+    title="Próximamente"
+    message="Esta sección se construye en la Fase 2. Migra el flujo de Vic desde fcagency-produ.netlify.app. Incluye gestión de producciones, asignación de modelos vía bookings, calendario y conexión con clientes."
+  />
+</Layout>

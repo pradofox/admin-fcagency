@@ -1,0 +1,12 @@
+---
+import { deleteSession, SESSION_COOKIE } from '../lib/auth';
+import { getDB } from '../lib/db';
+
+const sessionId = Astro.cookies.get(SESSION_COOKIE)?.value;
+if (sessionId) {
+  const db = getDB(Astro);
+  await deleteSession(db, sessionId);
+}
+Astro.cookies.delete(SESSION_COOKIE, { path: '/' });
+return Astro.redirect('/login');
+---

@@ -1,0 +1,30 @@
+---
+interface Props {
+  modelo: {
+    id: string;
+    nombre: string;
+    ciudad?: string | null;
+    instagram?: string | null;
+    estado: string;
+  };
+}
+const { modelo } = Astro.props;
+
+const chipClass: Record<string, string> = {
+  activo: 'chip-ok',
+  pausa: 'chip-warning',
+  archivado: 'chip-danger',
+  aspirante: 'chip-gold'
+};
+---
+
+<a href={`/modelos/${modelo.id}`} style="display:block;color:inherit;text-decoration:none">
+  <article class="card">
+    <div class="card-title">{modelo.nombre}</div>
+    <div class="card-meta">
+      <span class={`chip ${chipClass[modelo.estado] ?? ''}`}>{modelo.estado}</span>
+      {modelo.ciudad && <span>{modelo.ciudad}</span>}
+      {modelo.instagram && <span>@{modelo.instagram.replace(/^@/, '')}</span>}
+    </div>
+  </article>
+</a>

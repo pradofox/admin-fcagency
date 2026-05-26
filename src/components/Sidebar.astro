@@ -1,0 +1,28 @@
+---
+const currentPath = Astro.url.pathname;
+
+const links = [
+  { href: '/dashboard', label: 'Dashboard' },
+  { href: '/modelos', label: 'Modelos' },
+  { href: '/producciones', label: 'Producciones' },
+  { href: '/briefs', label: 'Briefs' },
+  { href: '/contenido', label: 'Contenido' },
+  { href: '/contactos', label: 'Contactos' },
+  { href: '/clientes', label: 'Clientes' }
+];
+
+function isActive(href: string) {
+  if (href === '/dashboard') return currentPath === href;
+  return currentPath === href || currentPath.startsWith(href + '/');
+}
+---
+
+<aside class="sidebar">
+  <div class="sidebar-brand">FC AGENCY</div>
+  <nav class="sidebar-nav">
+    {links.map((l) => (
+      <a href={l.href} class={`sidebar-link ${isActive(l.href) ? 'active' : ''}`}>{l.label}</a>
+    ))}
+  </nav>
+  <div class="sidebar-foot">admin.fcagency.mx</div>
+</aside>

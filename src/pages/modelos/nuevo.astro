@@ -1,0 +1,76 @@
+---
+import Layout from '../../components/Layout.astro';
+import ModeloForm from '../../components/modelos/ModeloForm.astro';
+import { requireUser } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
+
+const user = requireUser(Astro);
+const db = getDB(Astro);
+
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const nombre = (form.get('nombre') as string)?.trim();
+  if (!nombre) {
+    error = 'El nombre es obligatorio.';
+  } else {
+    const id = newId();
+    const ts = now();
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+    const getNum = (k: string) => {
+      const v = form.get(k);
+      if (v === null || v === '') return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    await db
+      .prepare(
+        `INSERT INTO modelos (
+          id, nombre, email, whatsapp, instagram, cumpleanos, genero,
+          estatura_cm, busto_cm, cintura_cm, cadera_cm, calzado_mx,
+          cabello, ojos, ciudad, notas, estado, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        id,
+        nombre,
+        get('email'),
+        get('whatsapp'),
+        get('instagram'),
+        get('cumpleanos'),
+        get('genero'),
+        getNum('estatura_cm'),
+        getNum('busto_cm'),
+        getNum('cintura_cm'),
+        getNum('cadera_cm'),
+        getNum('calzado_mx'),
+        get('cabello'),
+        get('ojos'),
+        get('ciudad'),
+        get('notas'),
+        (get('estado') as string) ?? 'activo',
+        user.id,
+        ts,
+        ts
+      )
+      .run();
+    return Astro.redirect(`/modelos/${id}`);
+  }
+}
+---
+
+<Layout title="Nueva modelo" pageTitle="Nueva modelo">
+  <div class="page-head">
+    <h1>Nueva modelo</h1>
+    <a href="/modelos" class="btn btn-sm">Volver</a>
+  </div>
+
+  {error && <p class="text-danger">{error}</p>}
+
+  <ModeloForm action="/modelos/nuevo" method="POST" submitLabel="Crear modelo" />
+</Layout>
