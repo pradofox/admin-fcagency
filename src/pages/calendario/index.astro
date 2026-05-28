@@ -1,0 +1,180 @@
+---
+import Layout from '../../components/Layout.astro';
+import EmptyState from '../../components/EmptyState.astro';
+import { requireUser } from '../../lib/session';
+import { getDB } from '../../lib/db';
+
+requireUser(Astro);
+const db = getDB(Astro);
+
+interface Event {
+  fecha: string;
+  tipo: string;
+  titulo: string;
+  detalle: string | null;
+  href: string;
+  done?: boolean;
+  prioridad?: string | null;
+  marca?: string | null;
+}
+
+// Range: 30 days back, 60 days forward
+const today = new Date();
+const startStr = new Date(today.getTime() - 30 * 86400000).toISOString().slice(0, 10);
+const endStr = new Date(today.getTime() + 60 * 86400000).toISOString().slice(0, 10);
+
+const acciones = await db
+  .prepare(
+    `SELECT fecha, tarea, prioridad, done, contacto_id, produccion_id
+     FROM acciones_calendario
+     WHERE fecha BETWEEN ? AND ?
+     ORDER BY fecha`
+  )
+  .bind(startStr, endStr)
+  .all<any>();
+
+const producciones = await db
+  .prepare(
+    `SELECT id, titulo, fecha_inicio as fecha, marca_id, estado, ubicacion_shoot
+     FROM producciones
+     WHERE fecha_inicio BETWEEN ? AND ?
+     ORDER BY fecha_inicio`
+  )
+  .bind(startStr, endStr)
+  .all<any>();
+
+const briefsPiezas = await db
+  .prepare(
+    `SELECT id, titulo, fecha_publicacion as fecha, marca_id, estado, plataforma, formato
+     FROM briefs
+     WHERE fecha_publicacion BETWEEN ? AND ?
+     ORDER BY fecha_publicacion`
+  )
+  .bind(startStr, endStr)
+  .all<any>();
+
+const piezas = await db
+  .prepare(
+    `SELECT id, titulo, fecha_programada as fecha, marca_id, estado, plataforma, formato
+     FROM piezas_contenido
+     WHERE fecha_programada BETWEEN ? AND ?
+     ORDER BY fecha_programada`
+  )
+  .bind(startStr, endStr)
+  .all<any>();
+
+const proxAccionesContactos = await db
+  .prepare(
+    `SELECT id, nombre, next_action_date as fecha, next_action_text as detalle, tipo
+     FROM contactos
+     WHERE next_action_date BETWEEN ? AND ? AND estatus_crm != 'cerrado'
+     ORDER BY next_action_date`
+  )
+  .bind(startStr, endStr)
+  .all<any>();
+
+const events: Event[] = [
+  ...((acciones.results ?? []) as any[]).map((e) => ({
+    fecha: e.fecha,
+    tipo: 'Tarea',
+    titulo: e.tarea,
+    detalle: null,
+    href: '/contactos',
+    done: !!e.done,
+    prioridad: e.prioridad
+  })),
+  ...((producciones.results ?? []) as any[]).map((e) => ({
+    fecha: e.fecha,
+    tipo: 'Producción',
+    titulo: e.titulo,
+    detalle: e.ubicacion_shoot,
+    href: `/producciones/${e.id}`,
+    marca: e.marca_id
+  })),
+  ...((briefsPiezas.results ?? []) as any[]).map((e) => ({
+    fecha: e.fecha,
+    tipo: 'Brief',
+    titulo: e.titulo,
+    detalle: [e.formato, e.plataforma].filter(Boolean).join(' / '),
+    href: `/briefs/${e.id}`,
+    marca: e.marca_id
+  })),
+  ...((piezas.results ?? []) as any[]).map((e) => ({
+    fecha: e.fecha,
+    tipo: 'Pieza',
+    titulo: e.titulo,
+    detalle: [e.formato, e.plataforma].filter(Boolean).join(' / '),
+    href: '/contenido',
+    marca: e.marca_id
+  })),
+  ...((proxAccionesContactos.results ?? []) as any[]).map((e) => ({
+    fecha: e.fecha,
+    tipo: 'Contacto',
+    titulo: `${e.nombre} — ${e.detalle || 'sin detalle'}`,
+    detalle: e.tipo,
+    href: `/contactos/${e.id}`
+  }))
+];
+
+events.sort((a, b) => a.fecha.localeCompare(b.fecha));
+
+// Group by date
+const byDate: Record<string, Event[]> = {};
+for (const e of events) {
+  byDate[e.fecha] = byDate[e.fecha] ?? [];
+  byDate[e.fecha].push(e);
+}
+const sortedDates = Object.keys(byDate).sort();
+
+const todayStr = today.toISOString().slice(0, 10);
+const chipTipo: Record<string, string> = {
+  Tarea: 'chip-warning',
+  Producción: 'chip-gold',
+  Brief: 'chip',
+  Pieza: 'chip-ok',
+  Contacto: 'chip'
+};
+
+function fmtFecha(s: string) {
+  const d = new Date(s + 'T12:00:00');
+  return d.toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+---
+
+<Layout title="Calendario" pageTitle="Calendario">
+  <div class="page-head">
+    <h1>Calendario</h1>
+    <span class="text-muted" style="font-size:12px">{startStr} → {endStr}</span>
+  </div>
+
+  <p class="text-muted" style="font-size:12px;margin-bottom:24px">
+    Vista unificada: producciones de Vic, briefs y piezas de Andrea, tareas de Victoria, próximas acciones de contactos.
+  </p>
+
+  {sortedDates.length === 0 ? (
+    <EmptyState title="Sin eventos" message="No hay nada agendado en esta ventana de fechas." />
+  ) : (
+    sortedDates.map((date) => (
+      <div style={`margin-bottom:24px;${date === todayStr ? 'border-left:3px solid var(--gold);padding-left:16px' : ''}`}>
+        <h3 style="margin-bottom:8px;color:var(--gold)">{fmtFecha(date)} {date === todayStr && '(hoy)'}</h3>
+        {byDate[date].map((e) => (
+          <a href={e.href} style="display:block;color:inherit;text-decoration:none">
+            <article class="card" style="margin-bottom:8px">
+              <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start">
+                <div style="flex:1;min-width:0">
+                  <div style={`font-weight:500;font-size:14px;${e.done ? 'text-decoration:line-through;color:var(--text-2)' : ''}`}>{e.titulo}</div>
+                  {e.detalle && <small class="text-muted">{e.detalle}</small>}
+                </div>
+                <div style="display:flex;gap:6px;flex-direction:column;align-items:flex-end">
+                  <span class={`chip ${chipTipo[e.tipo] ?? ''}`}>{e.tipo}</span>
+                  {e.marca && <small class="text-muted">{e.marca}</small>}
+                  {e.prioridad && <span class={`chip ${e.prioridad === 'Alta' ? 'chip-danger' : 'chip'}`}>{e.prioridad}</span>}
+                </div>
+              </div>
+            </article>
+          </a>
+        ))}
+      </div>
+    ))
+  )}
+</Layout>

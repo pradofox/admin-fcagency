@@ -14,3 +14,22 @@ export function requireUser(context: APIContext | AstroGlobal): SessionUser {
   }
   return user;
 }
+
+/** Si el user no es admin, redirige al dashboard. */
+export function requireAdmin(context: APIContext | AstroGlobal): SessionUser {
+  const user = requireUser(context);
+  if (user.rol !== 'admin') {
+    throw context.redirect('/dashboard');
+  }
+  return user;
+}
+
+/** True si el user puede escribir (admin o editor). */
+export function canEdit(user: SessionUser | null): boolean {
+  return user?.rol === 'admin' || user?.rol === 'editor';
+}
+
+/** True si el user es admin. */
+export function isAdmin(user: SessionUser | null): boolean {
+  return user?.rol === 'admin';
+}

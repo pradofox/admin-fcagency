@@ -1,0 +1,103 @@
+---
+import Layout from '../../components/Layout.astro';
+import { requireAdmin } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+
+requireAdmin(Astro);
+const db = getDB(Astro);
+
+let mensaje: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = form.get('_action') as string;
+  const userId = form.get('user_id') as string;
+
+  if (action === 'change_rol') {
+    const nuevoRol = form.get('rol') as string;
+    if (['admin', 'editor', 'viewer'].includes(nuevoRol)) {
+      await db.prepare('UPDATE users SET rol = ?, updated_at = ? WHERE id = ?').bind(nuevoRol, now(), userId).run();
+      mensaje = 'Rol actualizado.';
+    }
+  } else if (action === 'toggle_activo') {
+    const nuevo = form.get('nuevo') as string;
+    await db.prepare('UPDATE users SET activo = ?, updated_at = ? WHERE id = ?').bind(nuevo === '1' ? 1 : 0, now(), userId).run();
+    mensaje = 'Estado actualizado.';
+  } else if (action === 'delete_sessions') {
+    await db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId).run();
+    mensaje = 'Sesiones cerradas.';
+  }
+}
+
+const { results: users } = await db
+  .prepare('SELECT id, email, nombre, rol, activo, created_at FROM users ORDER BY created_at DESC')
+  .all<{ id: string; email: string; nombre: string; rol: string; activo: number; created_at: number }>();
+---
+
+<Layout title="Admin" pageTitle="Administración">
+  <div class="page-head">
+    <h1>Usuarios</h1>
+    <a href="/dashboard" class="btn btn-sm">Volver</a>
+  </div>
+
+  <p class="text-muted" style="font-size:12px;margin-bottom:24px">
+    Solo administradores ven esta página. Cambia roles, desactiva cuentas o cierra sesiones.
+    Auto-registro está abierto: cualquiera con la URL puede crear cuenta como viewer.
+  </p>
+
+  {mensaje && <p class="text-ok" style="margin-bottom:20px">{mensaje}</p>}
+
+  <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border);text-align:left">
+          <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Nombre</th>
+          <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Email</th>
+          <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Rol</th>
+          <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Estado</th>
+          <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Creado</th>
+          <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {users && users.map((u) => (
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:12px 10px">{u.nombre}</td>
+            <td style="padding:12px 10px;color:var(--text-2);font-size:12px">{u.email}</td>
+            <td style="padding:12px 10px">
+              <form method="POST" action="/admin" style="display:inline">
+                <input type="hidden" name="_action" value="change_rol" />
+                <input type="hidden" name="user_id" value={u.id} />
+                <select name="rol" onchange="this.form.submit()" class="select" style="font-size:12px;padding:5px 8px">
+                  {['admin', 'editor', 'viewer'].map((r) => (
+                    <option value={r} selected={u.rol === r}>{r}</option>
+                  ))}
+                </select>
+              </form>
+            </td>
+            <td style="padding:12px 10px">
+              <form method="POST" action="/admin" style="display:inline">
+                <input type="hidden" name="_action" value="toggle_activo" />
+                <input type="hidden" name="user_id" value={u.id} />
+                <input type="hidden" name="nuevo" value={u.activo ? '0' : '1'} />
+                <button type="submit" class={`chip ${u.activo ? 'chip-ok' : 'chip-danger'}`} style="border:0;cursor:pointer">
+                  {u.activo ? 'Activo' : 'Inactivo'}
+                </button>
+              </form>
+            </td>
+            <td style="padding:12px 10px;color:var(--text-2);font-size:12px">
+              {new Date(u.created_at).toLocaleDateString('es-MX')}
+            </td>
+            <td style="padding:12px 10px">
+              <form method="POST" action="/admin" onsubmit="return confirm('¿Cerrar todas las sesiones de este usuario?')" style="display:inline">
+                <input type="hidden" name="_action" value="delete_sessions" />
+                <input type="hidden" name="user_id" value={u.id} />
+                <button type="submit" class="btn btn-sm">Cerrar sesiones</button>
+              </form>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+</Layout>

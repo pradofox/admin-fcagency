@@ -2,43 +2,82 @@
 import Layout from '../../components/Layout.astro';
 import ModeloCard from '../../components/modelos/ModeloCard.astro';
 import EmptyState from '../../components/EmptyState.astro';
-import { requireUser } from '../../lib/session';
+import { requireUser, canEdit } from '../../lib/session';
 import { getDB } from '../../lib/db';
 
-requireUser(Astro);
+const user = requireUser(Astro);
 const db = getDB(Astro);
 
 const filtroEstado = Astro.url.searchParams.get('estado') ?? 'activo';
 const filtros = ['activo', 'pausa', 'aspirante', 'archivado'];
+const search = (Astro.url.searchParams.get('q') ?? '').trim();
 
-const { results } = await db
-  .prepare(
-    'SELECT id, nombre, ciudad, instagram, estado FROM modelos WHERE estado = ? ORDER BY nombre ASC LIMIT 200'
-  )
-  .bind(filtroEstado)
-  .all<{ id: string; nombre: string; ciudad: string | null; instagram: string | null; estado: string }>();
+let results: any[] = [];
+if (search) {
+  const like = `%${search}%`;
+  const r = await db
+    .prepare(
+      `SELECT id, nombre, ciudad, instagram, estado FROM modelos
+       WHERE (nombre LIKE ? OR instagram LIKE ? OR ciudad LIKE ?)
+       ORDER BY nombre ASC LIMIT 200`
+    )
+    .bind(like, like, like)
+    .all<any>();
+  results = r.results ?? [];
+} else {
+  const r = await db
+    .prepare(
+      'SELECT id, nombre, ciudad, instagram, estado FROM modelos WHERE estado = ? ORDER BY nombre ASC LIMIT 200'
+    )
+    .bind(filtroEstado)
+    .all<any>();
+  results = r.results ?? [];
+}
+
+const totalActivos = await db.prepare("SELECT COUNT(*) as c FROM modelos WHERE estado = 'activo'").first<{ c: number }>();
+const totalAspirantes = await db.prepare("SELECT COUNT(*) as c FROM modelos WHERE estado = 'aspirante'").first<{ c: number }>();
 ---
 
 <Layout title="Modelos" pageTitle="Modelos">
   <div class="page-head">
-    <h1>Modelos</h1>
-    <a href="/modelos/nuevo" class="btn btn-primary">+ Nueva</a>
+    <h1>Modelos <small class="text-muted" style="font-size:13px;letter-spacing:0;font-family:var(--font-body);text-transform:none">{totalActivos?.c ?? 0} activas · {totalAspirantes?.c ?? 0} aspirantes</small></h1>
+    {canEdit(user) && <a href="/modelos/nuevo" class="btn btn-primary">+ Nueva</a>}
   </div>
 
-  <div class="filters">
-    {filtros.map((f) => (
-      <a href={`/modelos?estado=${f}`} class={`filter-chip ${filtroEstado === f ? 'active' : ''}`}>{f}</a>
-    ))}
-  </div>
+  <form method="GET" action="/modelos" style="margin-bottom:16px">
+    <input
+      class="input"
+      type="search"
+      name="q"
+      value={search}
+      placeholder="Buscar por nombre, instagram, ciudad..."
+      autofocus
+      style="max-width:480px"
+    />
+  </form>
 
-  {results && results.length > 0 ? (
+  {!search && (
+    <div class="filters">
+      {filtros.map((f) => (
+        <a href={`/modelos?estado=${f}`} class={`filter-chip ${filtroEstado === f ? 'active' : ''}`}>{f}</a>
+      ))}
+    </div>
+  )}
+
+  {search && (
+    <p class="text-muted" style="font-size:12px;margin-bottom:16px">
+      Resultados de búsqueda para "{search}" — {results.length} encontradas. <a href="/modelos">Limpiar</a>
+    </p>
+  )}
+
+  {results.length > 0 ? (
     <div class="grid">
       {results.map((m) => <ModeloCard modelo={m} />)}
     </div>
   ) : (
     <EmptyState
-      title="Sin modelos en este estado"
-      message={`No hay modelos con estado "${filtroEstado}". Da de alta una nueva o cambia el filtro.`}
+      title={search ? 'Sin resultados' : 'Sin modelos en este estado'}
+      message={search ? `Nada coincide con "${search}".` : `No hay modelos con estado "${filtroEstado}".`}
     />
   )}
 </Layout>

@@ -1,17 +1,18 @@
 ---
 import Layout from '../../components/Layout.astro';
 import ModeloForm from '../../components/modelos/ModeloForm.astro';
-import { requireUser } from '../../lib/session';
+import { requireUser, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 
-requireUser(Astro);
+const user = requireUser(Astro);
+const editable = canEdit(user);
 const db = getDB(Astro);
 const { id } = Astro.params;
 
 let error: string | null = null;
 let saved = false;
 
-if (Astro.request.method === 'POST') {
+if (Astro.request.method === 'POST' && editable) {
   const form = await Astro.request.formData();
   const method = form.get('_method');
   if (method === 'DELETE') {
@@ -81,15 +82,21 @@ if (!modelo) {
     <h1>{modelo.nombre}</h1>
     <div style="display:flex;gap:10px">
       <a href="/modelos" class="btn btn-sm">Volver</a>
-      <form method="POST" action={`/modelos/${id}`} onsubmit="return confirm('¿Eliminar esta modelo? No se puede deshacer.')" style="display:inline">
-        <input type="hidden" name="_method" value="DELETE" />
-        <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
-      </form>
+      {editable && (
+        <form method="POST" action={`/modelos/${id}`} onsubmit="return confirm('¿Eliminar esta modelo? No se puede deshacer.')" style="display:inline">
+          <input type="hidden" name="_method" value="DELETE" />
+          <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
+        </form>
+      )}
     </div>
   </div>
 
   {saved && <p class="text-ok" style="margin-bottom:20px">Guardado.</p>}
   {error && <p class="text-danger" style="margin-bottom:20px">{error}</p>}
 
-  <ModeloForm modelo={modelo as any} action={`/modelos/${id}`} method="PATCH" submitLabel="Guardar cambios" />
+  {editable ? (
+    <ModeloForm modelo={modelo as any} action={`/modelos/${id}`} method="PATCH" submitLabel="Guardar cambios" />
+  ) : (
+    <p class="text-muted" style="font-size:12px;margin-top:24px">Solo lectura. Necesitas rol editor o admin para modificar.</p>
+  )}
 </Layout>

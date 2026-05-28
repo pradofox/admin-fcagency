@@ -1,5 +1,8 @@
 ---
+import { getUser, isAdmin } from '../lib/session';
+
 const currentPath = Astro.url.pathname;
+const user = getUser(Astro);
 
 const links = [
   { href: '/dashboard', label: 'Dashboard' },
@@ -9,7 +12,9 @@ const links = [
   { href: '/briefs', label: 'Briefs' },
   { href: '/contenido', label: 'Contenido' },
   { href: '/contactos', label: 'Contactos' },
-  { href: '/clientes', label: 'Clientes' }
+  { href: '/clientes', label: 'Clientes' },
+  { href: '/pagos', label: 'Pagos' },
+  { href: '/calendario', label: 'Calendario' }
 ];
 
 function isActive(href: string) {
@@ -24,6 +29,9 @@ function isActive(href: string) {
     {links.map((l) => (
       <a href={l.href} class={`sidebar-link ${isActive(l.href) ? 'active' : ''}`}>{l.label}</a>
     ))}
+    {isAdmin(user) && (
+      <a href="/admin" class={`sidebar-link ${isActive('/admin') ? 'active' : ''}`} style="margin-top:24px;color:var(--gold)">Admin</a>
+    )}
   </nav>
   <div class="sidebar-foot">admin.fcagency.mx</div>
 </aside>

@@ -1,0 +1,139 @@
+---
+import Layout from '../../components/Layout.astro';
+import EmptyState from '../../components/EmptyState.astro';
+import { requireUser } from '../../lib/session';
+import { getDB } from '../../lib/db';
+
+requireUser(Astro);
+const db = getDB(Astro);
+
+const filtroEstado = Astro.url.searchParams.get('estado') ?? 'pendiente';
+
+// Agregado por proveedor (nombre_libre) y rol
+const sql = filtroEstado === 'todos'
+  ? `SELECT
+      COALESCE(NULLIF(lp.nombre_libre, ''), '(sin nombre)') as nombre,
+      lp.rol,
+      lp.estado,
+      COUNT(*) as cuenta,
+      SUM(lp.cobro_cliente) as cobro_total,
+      SUM(lp.pago_proveedor) as pago_total,
+      SUM(lp.cobro_cliente - lp.pago_proveedor) as utilidad_total
+    FROM lineas_produccion lp
+    GROUP BY nombre, lp.rol, lp.estado
+    ORDER BY pago_total DESC, nombre`
+  : `SELECT
+      COALESCE(NULLIF(lp.nombre_libre, ''), '(sin nombre)') as nombre,
+      lp.rol,
+      lp.estado,
+      COUNT(*) as cuenta,
+      SUM(lp.cobro_cliente) as cobro_total,
+      SUM(lp.pago_proveedor) as pago_total,
+      SUM(lp.cobro_cliente - lp.pago_proveedor) as utilidad_total
+    FROM lineas_produccion lp WHERE lp.estado = ?
+    GROUP BY nombre, lp.rol, lp.estado
+    ORDER BY pago_total DESC, nombre`;
+
+const stmt = filtroEstado === 'todos' ? db.prepare(sql) : db.prepare(sql).bind(filtroEstado);
+const { results } = await stmt.all<any>();
+
+// Totales globales
+const totales = await db
+  .prepare(
+    `SELECT
+      SUM(cobro_cliente) as cobro_total,
+      SUM(pago_proveedor) as pago_total,
+      SUM(cobro_cliente - pago_proveedor) as utilidad_total
+    FROM lineas_produccion WHERE estado != 'cancelado'`
+  )
+  .first<any>();
+
+const totalesPorEstado = await db
+  .prepare(
+    `SELECT estado, COUNT(*) as cuenta, SUM(pago_proveedor) as pago FROM lineas_produccion GROUP BY estado`
+  )
+  .all<any>();
+
+const fmt = (n: number | null) =>
+  n ? `$${Math.round(n).toLocaleString('es-MX')}` : '$0';
+
+const chipEstado: Record<string, string> = {
+  pendiente: 'chip-warning',
+  pagado: 'chip-ok',
+  cancelado: 'chip-danger'
+};
+---
+
+<Layout title="Pagos" pageTitle="Pagos a proveedores">
+  <div class="page-head">
+    <h1>Pagos</h1>
+  </div>
+
+  <p class="text-muted" style="font-size:12px;margin-bottom:24px">
+    Resumen agregado por proveedor de las líneas de producción. Las líneas se gestionan
+    desde cada producción individual.
+  </p>
+
+  <div class="row" style="margin-bottom:32px">
+    <div class="col card">
+      <div class="card-meta">Cobrado al cliente (sin cancelados)</div>
+      <div class="card-title" style="color:var(--gold)">{fmt(totales?.cobro_total)}</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Pago a proveedores</div>
+      <div class="card-title">{fmt(totales?.pago_total)}</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Utilidad</div>
+      <div class="card-title" style="color:var(--ok)">{fmt(totales?.utilidad_total)}</div>
+    </div>
+  </div>
+
+  <div class="filters">
+    {['todos', 'pendiente', 'pagado', 'cancelado'].map((e) => (
+      <a href={`/pagos?estado=${e}`} class={`filter-chip ${filtroEstado === e ? 'active' : ''}`}>
+        {e}
+        {totalesPorEstado.results && (
+          <span class="text-muted" style="margin-left:6px">
+            {(totalesPorEstado.results as any[]).find((r) => r.estado === e)?.cuenta ?? (e === 'todos' ? totalesPorEstado.results.reduce((a: number, b: any) => a + b.cuenta, 0) : 0)}
+          </span>
+        )}
+      </a>
+    ))}
+  </div>
+
+  {results && results.length > 0 ? (
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border);text-align:left">
+            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Proveedor</th>
+            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Rol</th>
+            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Estado</th>
+            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Líneas</th>
+            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Cobrado</th>
+            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Pago</th>
+            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Utilidad</th>
+          </tr>
+        </thead>
+        <tbody>
+          {results.map((r: any) => (
+            <tr style="border-bottom:1px solid var(--border)">
+              <td style="padding:12px 10px"><strong>{r.nombre}</strong></td>
+              <td style="padding:12px 10px">{r.rol}</td>
+              <td style="padding:12px 10px">
+                <span class={`chip ${chipEstado[r.estado] ?? ''}`}>{r.estado}</span>
+              </td>
+              <td style="padding:12px 10px;text-align:right">{r.cuenta}</td>
+              <td style="padding:12px 10px;text-align:right">{fmt(r.cobro_total)}</td>
+              <td style="padding:12px 10px;text-align:right;color:var(--gold)">{fmt(r.pago_total)}</td>
+              <td style="padding:12px 10px;text-align:right;color:var(--ok)">{fmt(r.utilidad_total)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  ) : (
+    <EmptyState title="Sin líneas" message={`No hay líneas en estado "${filtroEstado}".`} />
+  )}
+</Layout>

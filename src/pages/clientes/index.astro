@@ -1,14 +1,125 @@
 ---
 import Layout from '../../components/Layout.astro';
 import EmptyState from '../../components/EmptyState.astro';
-import { requireUser } from '../../lib/session';
-requireUser(Astro);
+import { requireUser, canEdit } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
+
+const user = requireUser(Astro);
+const db = getDB(Astro);
+const editable = canEdit(user);
+
+let error: string | null = null;
+
+if (Astro.request.method === 'POST' && editable) {
+  const form = await Astro.request.formData();
+  const action = form.get('_action') as string;
+  if (action === 'delete') {
+    const id = form.get('id') as string;
+    await db.prepare('DELETE FROM clientes WHERE id = ?').bind(id).run();
+    return Astro.redirect('/clientes');
+  }
+  const nombre = (form.get('nombre') as string)?.trim();
+  if (!nombre) {
+    error = 'Nombre requerido.';
+  } else {
+    const id = newId();
+    const ts = now();
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+    await db
+      .prepare(
+        `INSERT INTO clientes (id, nombre, email, whatsapp, empresa, notas, marca_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(id, nombre, get('email'), get('whatsapp'), get('empresa'), get('notas'), get('marca_id'), ts, ts)
+      .run();
+    return Astro.redirect('/clientes');
+  }
+}
+
+const { results: clientes } = await db
+  .prepare(
+    `SELECT c.id, c.nombre, c.email, c.whatsapp, c.empresa, c.marca_id,
+            (SELECT COUNT(*) FROM producciones p WHERE p.cliente_id = c.id) as total_producciones,
+            (SELECT SUM(lp.cobro_cliente) FROM lineas_produccion lp
+              JOIN producciones p ON p.id = lp.produccion_id WHERE p.cliente_id = c.id) as total_cobrado
+     FROM clientes c
+     ORDER BY c.nombre ASC LIMIT 300`
+  )
+  .all<any>();
+
+const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<{ id: string; nombre: string }>()).results ?? [];
+
+const fmt = (n: number | null) =>
+  n ? `$${Math.round(n).toLocaleString('es-MX')}` : '—';
 ---
 
 <Layout title="Clientes" pageTitle="Clientes">
-  <div class="page-head"><h1>Clientes</h1></div>
-  <EmptyState
-    title="Próximamente"
-    message="Esta sección se construye en la Fase 2. Catálogo de clientes con historial de producciones y notas. Se alimenta también de la sección Contactos."
-  />
+  <div class="page-head">
+    <h1>Clientes</h1>
+  </div>
+
+  {error && <p class="text-danger">{error}</p>}
+
+  {editable && (
+    <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:32px">
+      <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Nuevo cliente</summary>
+      <form method="POST" action="/clientes" style="margin-top:16px">
+        <label class="label">Nombre / Empresa *</label>
+        <input class="input" name="nombre" required />
+
+        <div class="row">
+          <div class="col">
+            <label class="label">Email</label>
+            <input class="input" type="email" name="email" />
+          </div>
+          <div class="col">
+            <label class="label">WhatsApp</label>
+            <input class="input" name="whatsapp" />
+          </div>
+          <div class="col">
+            <label class="label">Empresa</label>
+            <input class="input" name="empresa" />
+          </div>
+          <div class="col">
+            <label class="label">Marca asociada</label>
+            <select class="select" name="marca_id">
+              <option value="">— sin asignar —</option>
+              {marcas.map((m) => <option value={m.id}>{m.nombre}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <label class="label">Notas</label>
+        <textarea class="textarea" name="notas"></textarea>
+
+        <button type="submit" class="btn btn-primary" style="margin-top:16px">Crear cliente</button>
+      </form>
+    </details>
+  )}
+
+  {clientes && clientes.length > 0 ? (
+    <div class="grid">
+      {clientes.map((c: any) => (
+        <article class="card">
+          <div class="card-title">{c.nombre}</div>
+          <div class="card-meta">
+            {c.empresa && <span class="chip">{c.empresa}</span>}
+            {c.marca_id && <span>{c.marca_id}</span>}
+            {c.email && <span class="text-muted">{c.email}</span>}
+            {c.whatsapp && <span class="text-muted">{c.whatsapp}</span>}
+          </div>
+          <div class="card-meta" style="margin-top:8px;border-top:1px solid var(--border);padding-top:10px">
+            <span><strong>{c.total_producciones ?? 0}</strong> <span class="text-muted">prods</span></span>
+            <span style="color:var(--gold)"><strong>{fmt(c.total_cobrado)}</strong> <span class="text-muted">facturado</span></span>
+          </div>
+        </article>
+      ))}
+    </div>
+  ) : (
+    <EmptyState title="Sin clientes" message="Aún no hay clientes capturados. Aparecerán aquí cuando los crees o cuando los asignes a producciones." />
+  )}
 </Layout>
