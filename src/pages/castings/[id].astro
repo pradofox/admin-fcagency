@@ -1,0 +1,310 @@
+---
+import Layout from '../../components/Layout.astro';
+import { requireUser, canEdit } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+
+const user = requireUser(Astro);
+const editable = canEdit(user);
+const db = getDB(Astro);
+const { id } = Astro.params;
+
+let mensaje: string | null = null;
+
+if (Astro.request.method === 'POST' && editable) {
+  const form = await Astro.request.formData();
+  const action = form.get('_action') as string;
+
+  if (action === 'delete') {
+    await db.prepare('DELETE FROM castings WHERE id = ?').bind(id).run();
+    return Astro.redirect('/castings');
+  }
+
+  if (action === 'add_propuesto') {
+    const modeloId = form.get('modelo_id') as string;
+    if (modeloId) {
+      await db
+        .prepare('INSERT OR IGNORE INTO casting_modelos_propuestos (casting_id, modelo_id) VALUES (?, ?)')
+        .bind(id, modeloId)
+        .run();
+      mensaje = 'Modelo agregada como propuesta.';
+    }
+  } else if (action === 'remove_propuesto') {
+    const modeloId = form.get('modelo_id') as string;
+    await db
+      .prepare('DELETE FROM casting_modelos_propuestos WHERE casting_id = ? AND modelo_id = ?')
+      .bind(id, modeloId)
+      .run();
+    mensaje = 'Removida de propuestas.';
+  } else if (action === 'set_seleccionado') {
+    const modeloId = form.get('modelo_id') as string;
+    await db
+      .prepare('UPDATE castings SET modelo_seleccionado_id = ?, updated_at = ? WHERE id = ?')
+      .bind(modeloId || null, now(), id)
+      .run();
+    mensaje = 'Seleccionada actualizada.';
+  } else if (action === 'change_etapa') {
+    const etapa = form.get('etapa') as string;
+    if (['Abierto', 'Selección', 'Confirmado', 'Realizado', 'Cancelado'].includes(etapa)) {
+      await db.prepare('UPDATE castings SET etapa = ?, updated_at = ? WHERE id = ?').bind(etapa, now(), id).run();
+      mensaje = 'Etapa actualizada.';
+    }
+  } else {
+    // Update casting general
+    const cliente = (form.get('cliente') as string)?.trim();
+    if (cliente) {
+      const get = (k: string) => {
+        const v = form.get(k);
+        return v === null || v === '' ? null : String(v).trim();
+      };
+      const getNum = (k: string) => {
+        const v = form.get(k);
+        if (v === null || v === '') return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      };
+      await db
+        .prepare(
+          `UPDATE castings SET cliente = ?, marca_id = ?, tipo = ?, fecha = ?, hora = ?,
+            lugar = ?, perfil = ?, pago_modelo = ?, notas = ?, updated_at = ? WHERE id = ?`
+        )
+        .bind(cliente, get('marca_id'), get('tipo'), get('fecha'), get('hora'),
+              get('lugar'), get('perfil'), getNum('pago_modelo'), get('notas'), now(), id)
+        .run();
+      mensaje = 'Guardado.';
+    }
+  }
+}
+
+const casting = await db.prepare('SELECT * FROM castings WHERE id = ?').bind(id).first<any>();
+if (!casting) return Astro.redirect('/castings');
+
+const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<{ id: string; nombre: string }>()).results ?? [];
+
+const { results: propuestos } = await db
+  .prepare(
+    `SELECT m.id, m.nombre, m.instagram, m.ciudad, m.estado
+     FROM casting_modelos_propuestos cmp
+     JOIN modelos m ON m.id = cmp.modelo_id
+     WHERE cmp.casting_id = ? ORDER BY m.nombre`
+  )
+  .bind(id)
+  .all<any>();
+
+const seleccionada = casting.modelo_seleccionado_id
+  ? await db.prepare('SELECT id, nombre, instagram FROM modelos WHERE id = ?').bind(casting.modelo_seleccionado_id).first<any>()
+  : null;
+
+const chipEtapa: Record<string, string> = {
+  Abierto: 'chip',
+  'Selección': 'chip-warning',
+  Confirmado: 'chip-gold',
+  Realizado: 'chip-ok',
+  Cancelado: 'chip-danger'
+};
+---
+
+<Layout title={`Casting — ${casting.cliente}`} pageTitle={`Casting · ${casting.cliente}`}>
+  <div class="page-head">
+    <h1>{casting.cliente}</h1>
+    <div style="display:flex;gap:10px">
+      <a href="/castings" class="btn btn-sm">Volver</a>
+      {editable && (
+        <form method="POST" action={`/castings/${id}`} onsubmit="return confirm('¿Eliminar casting?')" style="display:inline">
+          <input type="hidden" name="_action" value="delete" />
+          <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
+        </form>
+      )}
+    </div>
+  </div>
+
+  {mensaje && <p class="text-ok" style="margin-bottom:20px">{mensaje}</p>}
+
+  <div class="row" style="margin-bottom:32px">
+    <div class="col card">
+      <div class="card-meta">Etapa</div>
+      {editable ? (
+        <form method="POST" action={`/castings/${id}`} style="margin-top:8px">
+          <input type="hidden" name="_action" value="change_etapa" />
+          <select class="select" name="etapa" onchange="this.form.submit()" style="font-size:13px">
+            {['Abierto', 'Selección', 'Confirmado', 'Realizado', 'Cancelado'].map((e) => (
+              <option value={e} selected={casting.etapa === e}>{e}</option>
+            ))}
+          </select>
+        </form>
+      ) : (
+        <span class={`chip ${chipEtapa[casting.etapa] ?? ''}`}>{casting.etapa}</span>
+      )}
+    </div>
+    <div class="col card">
+      <div class="card-meta">Fecha</div>
+      <div class="card-title" style="font-size:15px">{casting.fecha ?? '—'}</div>
+      {casting.hora && <small>{casting.hora}</small>}
+    </div>
+    <div class="col card">
+      <div class="card-meta">Lugar</div>
+      <div class="card-title" style="font-size:14px">{casting.lugar ?? '—'}</div>
+    </div>
+    {casting.pago_modelo && (
+      <div class="col card">
+        <div class="card-meta">Pago modelo</div>
+        <div class="card-title" style="color:var(--gold)">${Math.round(casting.pago_modelo).toLocaleString('es-MX')}</div>
+      </div>
+    )}
+  </div>
+
+  {casting.perfil && (
+    <div class="card" style="margin-bottom:32px">
+      <div class="card-meta">Perfil buscado</div>
+      <p style="margin-top:8px">{casting.perfil}</p>
+    </div>
+  )}
+
+  {seleccionada && (
+    <>
+      <h2>Seleccionada</h2>
+      <div class="card" style="margin-bottom:32px;border-color:var(--ok)">
+        <div class="card-title" style="color:var(--ok)">{seleccionada.nombre}</div>
+        <div class="card-meta">
+          {seleccionada.instagram && <span>@{String(seleccionada.instagram).replace(/^@/, '')}</span>}
+          <a href={`/modelos/${seleccionada.id}`} style="margin-left:auto">Ver perfil →</a>
+        </div>
+      </div>
+    </>
+  )}
+
+  <h2>Modelos propuestas <small class="text-muted" style="font-size:12px;letter-spacing:0;font-family:var(--font-body);text-transform:none">{propuestos?.length ?? 0}</small></h2>
+
+  {propuestos && propuestos.length > 0 ? (
+    <div class="grid" style="margin-bottom:24px">
+      {propuestos.map((m: any) => (
+        <article class={`card ${seleccionada?.id === m.id ? '' : ''}`} style={seleccionada?.id === m.id ? 'border-color:var(--ok)' : ''}>
+          <div class="card-title" style="font-size:16px">{m.nombre}</div>
+          <div class="card-meta">
+            {m.instagram && <span>@{String(m.instagram).replace(/^@/, '')}</span>}
+            {m.ciudad && <span>{m.ciudad}</span>}
+            <a href={`/modelos/${m.id}`} style="font-size:11px">Perfil →</a>
+          </div>
+          {editable && (
+            <div style="display:flex;gap:8px;margin-top:12px">
+              {seleccionada?.id !== m.id && (
+                <form method="POST" action={`/castings/${id}`} style="display:inline">
+                  <input type="hidden" name="_action" value="set_seleccionado" />
+                  <input type="hidden" name="modelo_id" value={m.id} />
+                  <button type="submit" class="btn btn-sm btn-primary">Marcar como seleccionada</button>
+                </form>
+              )}
+              <form method="POST" action={`/castings/${id}`} style="display:inline">
+                <input type="hidden" name="_action" value="remove_propuesto" />
+                <input type="hidden" name="modelo_id" value={m.id} />
+                <button type="submit" class="btn btn-sm">Quitar</button>
+              </form>
+            </div>
+          )}
+        </article>
+      ))}
+    </div>
+  ) : (
+    <p class="text-muted" style="margin-bottom:24px">Aún no hay modelos propuestas. Agrega del roster.</p>
+  )}
+
+  {editable && (
+    <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:32px">
+      <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Agregar modelo propuesta</summary>
+      <form method="POST" action={`/castings/${id}`} style="margin-top:16px;display:flex;gap:10px;align-items:flex-end">
+        <input type="hidden" name="_action" value="add_propuesto" />
+        <div style="flex:1">
+          <label class="label">Buscar modelo del roster</label>
+          <input class="input" id="modelo_picker" placeholder="Empieza a escribir..." autocomplete="off" />
+          <input type="hidden" name="modelo_id" id="modelo_id_hidden" />
+          <div id="modelo_results" style="position:relative"></div>
+        </div>
+        <button type="submit" class="btn btn-primary">Agregar</button>
+      </form>
+      <script type="module" is:inline>
+        (() => {
+          const picker = document.getElementById('modelo_picker');
+          const hidden = document.getElementById('modelo_id_hidden');
+          const results = document.getElementById('modelo_results');
+          let timer = null;
+          picker.addEventListener('input', () => {
+            clearTimeout(timer);
+            const q = picker.value.trim();
+            if (q.length < 2) { results.innerHTML = ''; hidden.value = ''; return; }
+            timer = setTimeout(async () => {
+              try {
+                const r = await fetch('/api/modelos/search?q=' + encodeURIComponent(q));
+                const items = await r.json();
+                results.innerHTML = items.slice(0, 8).map((m) =>
+                  `<button type="button" data-id="${m.id}" style="display:block;width:100%;text-align:left;background:var(--bg-3);border:1px solid var(--border);color:var(--text);padding:8px 12px;cursor:pointer;font-family:inherit;font-size:13px;margin-top:2px">${m.nombre}${m.ciudad ? ' · ' + m.ciudad : ''}</button>`
+                ).join('');
+                results.querySelectorAll('button').forEach((b) => {
+                  b.addEventListener('click', () => {
+                    hidden.value = b.dataset.id;
+                    picker.value = b.textContent;
+                    results.innerHTML = '';
+                  });
+                });
+              } catch (e) { results.innerHTML = ''; }
+            }, 200);
+          });
+        })();
+      </script>
+    </details>
+  )}
+
+  <h2>Detalles</h2>
+  <form method="POST" action={`/castings/${id}`}>
+    <label class="label">Cliente</label>
+    <input class="input" name="cliente" value={casting.cliente} required disabled={!editable} />
+
+    <div class="row">
+      <div class="col">
+        <label class="label">Marca</label>
+        <select class="select" name="marca_id" disabled={!editable}>
+          <option value="">— sin asignar —</option>
+          {marcas.map((m) => <option value={m.id} selected={casting.marca_id === m.id}>{m.nombre}</option>)}
+        </select>
+      </div>
+      <div class="col">
+        <label class="label">Tipo</label>
+        <select class="select" name="tipo" disabled={!editable}>
+          <option value="">— sin asignar —</option>
+          {['Editorial', 'Comercial', 'Pasarela', 'Video', 'Fitting', 'Evento', 'Otro'].map((t) => (
+            <option value={t} selected={casting.tipo === t}>{t}</option>
+          ))}
+        </select>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col">
+        <label class="label">Fecha</label>
+        <input class="input" type="date" name="fecha" value={casting.fecha ?? ''} disabled={!editable} />
+      </div>
+      <div class="col">
+        <label class="label">Hora</label>
+        <input class="input" type="time" name="hora" value={casting.hora ?? ''} disabled={!editable} />
+      </div>
+      <div class="col">
+        <label class="label">Lugar</label>
+        <input class="input" name="lugar" value={casting.lugar ?? ''} disabled={!editable} />
+      </div>
+      <div class="col">
+        <label class="label">Pago modelo (MXN)</label>
+        <input class="input" type="number" step="0.01" name="pago_modelo" value={casting.pago_modelo ?? ''} disabled={!editable} />
+      </div>
+    </div>
+
+    <label class="label">Perfil</label>
+    <textarea class="textarea" name="perfil" disabled={!editable}>{casting.perfil ?? ''}</textarea>
+
+    <label class="label">Notas</label>
+    <textarea class="textarea" name="notas" disabled={!editable}>{casting.notas ?? ''}</textarea>
+
+    {editable && (
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Guardar cambios</button>
+      </div>
+    )}
+  </form>
+</Layout>
