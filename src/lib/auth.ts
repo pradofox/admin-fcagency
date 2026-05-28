@@ -15,14 +15,40 @@ interface UserRow {
   activo: number;
 }
 
-/** Genera un magic-link token para el email. Si el usuario no existe o está inactivo, retorna null. */
+/**
+ * Genera un magic-link token para el email.
+ *
+ * Auto-registro temporal: si el email no existe, crea cuenta con rol 'viewer'.
+ * Esto facilita el onboarding inicial del equipo. Cuando todos estén dentro,
+ * un admin puede deshabilitar este comportamiento volviendo al check estricto.
+ *
+ * Si el usuario existe pero está inactivo (activo = 0), retorna null sin crear token.
+ */
 export async function createAuthToken(db: D1Database, email: string): Promise<string | null> {
   const emailNorm = email.trim().toLowerCase();
-  const user = await db
+  let user = await db
     .prepare('SELECT id, activo FROM users WHERE email = ?')
     .bind(emailNorm)
     .first<{ id: string; activo: number }>();
-  if (!user || !user.activo) return null;
+
+  if (user && !user.activo) return null;
+
+  if (!user) {
+    // Auto-registro: nombre = parte antes de @, rol viewer
+    const newUserId = newId();
+    const nombre = emailNorm.split('@')[0]
+      .replace(/[._-]+/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+    const ts = now();
+    await db
+      .prepare(
+        `INSERT INTO users (id, email, nombre, rol, marcas, activo, created_at, updated_at)
+         VALUES (?, ?, ?, 'viewer', '[]', 1, ?, ?)`
+      )
+      .bind(newUserId, emailNorm, nombre, ts, ts)
+      .run();
+    user = { id: newUserId, activo: 1 };
+  }
 
   const token = newToken();
   const id = newId();
