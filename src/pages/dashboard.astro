@@ -12,6 +12,9 @@ async function count(sql: string, ...params: any[]): Promise<number> {
   return row?.c ?? 0;
 }
 
+const todayISO = new Date().toISOString().slice(0, 10);
+const in7days = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+
 const [
   modelosActivas,
   produccionesEnCurso,
@@ -20,7 +23,9 @@ const [
   castingsAbiertos,
   piezasPendientes,
   contactosConPagoPendiente,
-  contactosConRetroPendiente
+  contactosConRetroPendiente,
+  produccionesEstaSemana,
+  modelosPendientesMaterial
 ] = await Promise.all([
   count("SELECT COUNT(*) as c FROM modelos WHERE estado = 'activo'"),
   count("SELECT COUNT(*) as c FROM producciones WHERE estado IN ('planeacion','confirmada','en_curso')"),
@@ -29,33 +34,70 @@ const [
   count("SELECT COUNT(*) as c FROM castings WHERE etapa IN ('Abierto','Selección')"),
   count("SELECT COUNT(*) as c FROM piezas_contenido WHERE estado != 'Publicado'"),
   count("SELECT COUNT(*) as c FROM contactos WHERE pago_cliente_estado IN ('pendiente','anticipo_recibido')"),
-  count('SELECT COUNT(*) as c FROM contactos WHERE retro_enviada = 0')
+  count('SELECT COUNT(*) as c FROM contactos WHERE retro_enviada = 0 AND estatus_crm = \'cerrado\''),
+  count('SELECT COUNT(*) as c FROM producciones WHERE fecha_inicio BETWEEN ? AND ?', todayISO, in7days),
+  count("SELECT COUNT(*) as c FROM modelos WHERE estado = 'activo' AND (polas = 0 OR book = 0 OR videocasting = 0)")
 ]);
 
-// Próximas acciones (calendario de Victoria + próximas acciones por contacto)
+// Próximas acciones (cross-secciones)
 const { results: proxAcciones } = await db
   .prepare(
-    `SELECT 'contacto' as origen, c.id, c.nombre as titulo, c.next_action_date as fecha, c.next_action_text as detalle
-     FROM contactos c WHERE c.next_action_date IS NOT NULL AND c.next_action_date >= date('now', 'localtime') AND c.estatus_crm != 'cerrado'
-     ORDER BY c.next_action_date ASC LIMIT 10`
+    `SELECT id, nombre as titulo, next_action_date as fecha, next_action_text as detalle, tipo
+     FROM contactos
+     WHERE next_action_date IS NOT NULL AND next_action_date >= date('now', 'localtime') AND estatus_crm != 'cerrado'
+     ORDER BY next_action_date ASC LIMIT 8`
   )
-  .all<{ origen: string; id: string; titulo: string; fecha: string; detalle: string | null }>();
+  .all<any>();
+
+// Próximas producciones
+const { results: proxProds } = await db
+  .prepare(
+    `SELECT id, titulo, fecha_inicio, marca_id, ubicacion_shoot,
+            (SELECT COUNT(*) FROM lineas_produccion WHERE produccion_id = producciones.id) as lineas
+     FROM producciones
+     WHERE fecha_inicio >= date('now', 'localtime') AND estado != 'cancelada'
+     ORDER BY fecha_inicio ASC LIMIT 5`
+  )
+  .all<any>();
+
+// Cumpleaños esta semana de modelos (cumpleanos puede ser TEXT libre, así que esto es best-effort)
+// Lo skip por ahora porque el formato es heterogéneo.
+
+// Producciones por marca con totales
+const { results: porMarca } = await db
+  .prepare(
+    `SELECT
+        COALESCE(p.marca_id, '— sin marca —') as marca,
+        COUNT(p.id) as prods,
+        SUM(COALESCE(t.cobro_total, 0)) as cobro
+     FROM producciones p
+     LEFT JOIN (
+       SELECT produccion_id, SUM(cobro_cliente) as cobro_total
+       FROM lineas_produccion GROUP BY produccion_id
+     ) t ON t.produccion_id = p.id
+     GROUP BY marca ORDER BY cobro DESC`
+  )
+  .all<any>();
+
+const fmt = (n: number | null) =>
+  n ? `$${Math.round(n).toLocaleString('es-MX')}` : '$0';
 ---
 
 <Layout title="Dashboard" pageTitle="Dashboard">
   <div class="page-head">
     <h1>Hola, {user.nombre.split(' ')[0]}</h1>
+    <small class="text-muted">{new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}</small>
   </div>
 
   <h2 style="margin-bottom:14px">Resumen</h2>
-  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr));margin-bottom:36px">
+  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr));margin-bottom:36px">
     <a href="/modelos" class="card" style="display:block;color:inherit">
       <div class="card-title">{modelosActivas}</div>
       <div class="card-meta">Modelos activas</div>
     </a>
     <a href="/producciones" class="card" style="display:block;color:inherit">
       <div class="card-title">{produccionesEnCurso}</div>
-      <div class="card-meta">Producciones en curso</div>
+      <div class="card-meta">Producciones vivas</div>
     </a>
     <a href="/castings" class="card" style="display:block;color:inherit">
       <div class="card-title">{castingsAbiertos}</div>
@@ -71,38 +113,89 @@ const { results: proxAcciones } = await db
     </a>
     <a href="/contactos" class="card" style="display:block;color:inherit">
       <div class="card-title">{contactosTotal}</div>
-      <div class="card-meta">Contactos totales</div>
+      <div class="card-meta">Contactos</div>
     </a>
   </div>
 
-  <h2 style="margin-bottom:14px">Pendientes urgentes</h2>
-  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(240px,1fr));margin-bottom:36px">
+  <h2 style="margin-bottom:14px">Atención requerida</h2>
+  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr));margin-bottom:36px">
     <a href="/contactos?estatus=pago_pendiente" class="card" style="display:block;color:inherit;border-color:var(--warning)">
       <div class="card-title" style="color:var(--warning)">{contactosConPagoPendiente}</div>
-      <div class="card-meta">Contactos con pago pendiente</div>
+      <div class="card-meta">Pago cliente pendiente</div>
+    </a>
+    <a href="/producciones" class="card" style="display:block;color:inherit">
+      <div class="card-title">{produccionesEstaSemana}</div>
+      <div class="card-meta">Producciones próximos 7 días</div>
+    </a>
+    <a href="/modelos" class="card" style="display:block;color:inherit">
+      <div class="card-title" style="color:var(--gold)">{modelosPendientesMaterial}</div>
+      <div class="card-meta">Modelos con material pendiente</div>
     </a>
     <a href="/contactos" class="card" style="display:block;color:inherit">
       <div class="card-title">{contactosConRetroPendiente}</div>
-      <div class="card-meta">Sin retro enviada</div>
+      <div class="card-meta">Cerrados sin retro</div>
     </a>
   </div>
 
-  <h2 style="margin-bottom:14px">Próximas acciones</h2>
-  {proxAcciones && proxAcciones.length > 0 ? (
-    <div class="card">
-      {proxAcciones.map((a) => (
-        <a href={`/contactos/${a.id}`} style="display:block;padding:10px 0;border-bottom:1px solid var(--border);color:inherit;text-decoration:none">
-          <div style="display:flex;justify-content:space-between;gap:14px">
-            <div>
-              <div style="font-weight:500">{a.titulo}</div>
-              {a.detalle && <small>{a.detalle}</small>}
+  <div class="row" style="align-items:flex-start;gap:20px;margin-bottom:36px">
+    <div class="col">
+      <h2 style="margin-bottom:14px">Próximas producciones</h2>
+      {proxProds && proxProds.length > 0 ? (
+        proxProds.map((p: any) => (
+          <a href={`/producciones/${p.id}`} class="card" style="display:block;color:inherit;text-decoration:none;margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;gap:14px">
+              <div style="flex:1;min-width:0">
+                <div style="font-weight:500;font-size:14px">{p.titulo}</div>
+                <small class="text-muted">{p.ubicacion_shoot ?? '—'} · {p.lineas} líneas</small>
+              </div>
+              <small class="text-muted" style="white-space:nowrap">{p.fecha_inicio}</small>
             </div>
-            <small class="text-muted">{a.fecha}</small>
-          </div>
-        </a>
-      ))}
+          </a>
+        ))
+      ) : (
+        <p class="text-muted">No hay producciones agendadas.</p>
+      )}
     </div>
-  ) : (
-    <p class="text-muted">Sin acciones próximas registradas.</p>
-  )}
+
+    <div class="col">
+      <h2 style="margin-bottom:14px">Próximas acciones</h2>
+      {proxAcciones && proxAcciones.length > 0 ? (
+        proxAcciones.map((a: any) => (
+          <a href={`/contactos/${a.id}`} class="card" style="display:block;color:inherit;text-decoration:none;margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;gap:14px">
+              <div style="flex:1;min-width:0">
+                <div style="font-weight:500;font-size:14px">{a.titulo}</div>
+                {a.detalle && <small class="text-muted">{a.detalle}</small>}
+              </div>
+              <small class="text-muted" style="white-space:nowrap">{a.fecha}</small>
+            </div>
+          </a>
+        ))
+      ) : (
+        <p class="text-muted">Sin acciones registradas.</p>
+      )}
+    </div>
+  </div>
+
+  <h2 style="margin-bottom:14px">Producciones por marca</h2>
+  <div style="overflow-x:auto;margin-bottom:36px">
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border);text-align:left">
+          <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Marca</th>
+          <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Producciones</th>
+          <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Cobrado</th>
+        </tr>
+      </thead>
+      <tbody>
+        {porMarca && porMarca.map((m: any) => (
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:12px 10px"><strong>{m.marca}</strong></td>
+            <td style="padding:12px 10px;text-align:right">{m.prods}</td>
+            <td style="padding:12px 10px;text-align:right;color:var(--gold)">{fmt(m.cobro)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
 </Layout>

@@ -1,14 +1,15 @@
 ---
 import Layout from '../../components/Layout.astro';
 import EmptyState from '../../components/EmptyState.astro';
-import { requireUser } from '../../lib/session';
+import { requireUser, canEdit } from '../../lib/session';
 import { getDB } from '../../lib/db';
 
-requireUser(Astro);
+const user = requireUser(Astro);
 const db = getDB(Astro);
 
 const filtroTipo = Astro.url.searchParams.get('tipo') ?? 'todos';
 const filtroEstatus = Astro.url.searchParams.get('estatus') ?? 'todos';
+const search = (Astro.url.searchParams.get('q') ?? '').trim();
 const tipos = ['todos', 'cliente', 'modelo', 'proveedor', 'aspirante', 'colaborador'];
 const estatusList = [
   'todos', 'nuevo_contacto', 'cotizacion_enviada', 'en_negociacion', 'confirmado',
@@ -17,6 +18,11 @@ const estatusList = [
 
 const where: string[] = [];
 const params: string[] = [];
+if (search) {
+  const like = `%${search}%`;
+  where.push('(nombre LIKE ? OR email LIKE ? OR whatsapp LIKE ? OR empresa LIKE ? OR notas LIKE ?)');
+  params.push(like, like, like, like, like);
+}
 if (filtroTipo !== 'todos') { where.push('tipo = ?'); params.push(filtroTipo); }
 if (filtroEstatus !== 'todos') { where.push('estatus_crm = ?'); params.push(filtroEstatus); }
 
@@ -24,7 +30,7 @@ const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
 const stmt = db.prepare(
   `SELECT id, nombre, tipo, estatus_crm, marca_id, canal, whatsapp, email, next_action_date, next_action_text
    FROM contactos ${whereClause}
-   ORDER BY next_action_date ASC NULLS LAST, created_at DESC
+   ORDER BY next_action_date ASC, created_at DESC
    LIMIT 300`
 );
 const { results } = await (params.length ? stmt.bind(...params) : stmt).all<any>();
@@ -41,8 +47,12 @@ const chipTipo: Record<string, string> = {
 <Layout title="Contactos" pageTitle="Contactos">
   <div class="page-head">
     <h1>Contactos</h1>
-    <a href="/contactos/nuevo" class="btn btn-primary">+ Nuevo</a>
+    {canEdit(user) && <a href="/contactos/nuevo" class="btn btn-primary">+ Nuevo</a>}
   </div>
+
+  <form method="GET" action="/contactos" style="margin-bottom:16px">
+    <input class="input" type="search" name="q" value={search} placeholder="Buscar por nombre, email, whatsapp, empresa, notas..." style="max-width:480px" />
+  </form>
 
   <div class="filters">
     {tipos.map((t) => (

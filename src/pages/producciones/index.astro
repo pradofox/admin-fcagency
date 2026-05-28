@@ -2,67 +2,85 @@
 import Layout from '../../components/Layout.astro';
 import ProduccionCard from '../../components/producciones/ProduccionCard.astro';
 import EmptyState from '../../components/EmptyState.astro';
-import { requireUser } from '../../lib/session';
+import { requireUser, canEdit } from '../../lib/session';
 import { getDB } from '../../lib/db';
 
-requireUser(Astro);
+const user = requireUser(Astro);
 const db = getDB(Astro);
 
 const filtroEstado = Astro.url.searchParams.get('estado') ?? 'todas';
 const filtros = ['todas', 'planeacion', 'confirmada', 'en_curso', 'completada'];
+const search = (Astro.url.searchParams.get('q') ?? '').trim();
 
-const sql =
-  filtroEstado === 'todas'
-    ? `SELECT p.id, p.titulo, p.marca_id, p.fecha_inicio, p.estado, p.ubicacion_shoot,
+let results: any[] = [];
+
+if (search) {
+  const like = `%${search}%`;
+  const r = await db
+    .prepare(
+      `SELECT p.id, p.titulo, p.marca_id, p.fecha_inicio, p.estado, p.ubicacion_shoot,
               (SELECT SUM(lp.cobro_cliente) FROM lineas_produccion lp WHERE lp.produccion_id = p.id) as total_cobro
        FROM producciones p
-       ORDER BY p.fecha_inicio DESC NULLS LAST, p.created_at DESC
-       LIMIT 200`
-    : `SELECT p.id, p.titulo, p.marca_id, p.fecha_inicio, p.estado, p.ubicacion_shoot,
-              (SELECT SUM(lp.cobro_cliente) FROM lineas_produccion lp WHERE lp.produccion_id = p.id) as total_cobro
-       FROM producciones p
-       WHERE p.estado = ?
-       ORDER BY p.fecha_inicio DESC NULLS LAST, p.created_at DESC
-       LIMIT 200`;
+       WHERE p.titulo LIKE ? OR p.ubicacion_shoot LIKE ? OR p.notas LIKE ?
+       ORDER BY p.fecha_inicio DESC LIMIT 200`
+    )
+    .bind(like, like, like)
+    .all<any>();
+  results = r.results ?? [];
+} else {
+  const sql =
+    filtroEstado === 'todas'
+      ? `SELECT p.id, p.titulo, p.marca_id, p.fecha_inicio, p.estado, p.ubicacion_shoot,
+                (SELECT SUM(lp.cobro_cliente) FROM lineas_produccion lp WHERE lp.produccion_id = p.id) as total_cobro
+         FROM producciones p
+         ORDER BY p.fecha_inicio DESC, p.created_at DESC LIMIT 200`
+      : `SELECT p.id, p.titulo, p.marca_id, p.fecha_inicio, p.estado, p.ubicacion_shoot,
+                (SELECT SUM(lp.cobro_cliente) FROM lineas_produccion lp WHERE lp.produccion_id = p.id) as total_cobro
+         FROM producciones p
+         WHERE p.estado = ?
+         ORDER BY p.fecha_inicio DESC, p.created_at DESC LIMIT 200`;
+  const stmt = filtroEstado === 'todas' ? db.prepare(sql) : db.prepare(sql).bind(filtroEstado);
+  const r = await stmt.all<any>();
+  results = r.results ?? [];
+}
 
-const stmt = filtroEstado === 'todas' ? db.prepare(sql) : db.prepare(sql).bind(filtroEstado);
-const { results } = await stmt.all<{
-  id: string;
-  titulo: string;
-  marca_id: string | null;
-  fecha_inicio: string | null;
-  estado: string;
-  ubicacion_shoot: string | null;
-  total_cobro: number | null;
-}>();
+const totalProds = (await db.prepare('SELECT COUNT(*) as c FROM producciones').first<{ c: number }>())?.c ?? 0;
 ---
 
 <Layout title="Producciones" pageTitle="Producciones">
   <div class="page-head">
-    <h1>Producciones</h1>
-    <a href="/producciones/nuevo" class="btn btn-primary">+ Nueva</a>
+    <h1>Producciones <small class="text-muted" style="font-size:13px;letter-spacing:0;font-family:var(--font-body);text-transform:none">{totalProds} totales</small></h1>
+    {canEdit(user) && <a href="/producciones/nuevo" class="btn btn-primary">+ Nueva</a>}
   </div>
 
-  <div class="filters">
-    {filtros.map((f) => (
-      <a href={`/producciones?estado=${f}`} class={`filter-chip ${filtroEstado === f ? 'active' : ''}`}>
-        {f.replace('_', ' ')}
-      </a>
-    ))}
-  </div>
+  <form method="GET" action="/producciones" style="margin-bottom:16px">
+    <input class="input" type="search" name="q" value={search} placeholder="Buscar por título, ubicación, notas..." style="max-width:480px" />
+  </form>
 
-  {results && results.length > 0 ? (
+  {!search && (
+    <div class="filters">
+      {filtros.map((f) => (
+        <a href={`/producciones?estado=${f}`} class={`filter-chip ${filtroEstado === f ? 'active' : ''}`}>
+          {f.replace('_', ' ')}
+        </a>
+      ))}
+    </div>
+  )}
+
+  {search && (
+    <p class="text-muted" style="font-size:12px;margin-bottom:16px">
+      Buscando "{search}" — {results.length}. <a href="/producciones">Limpiar</a>
+    </p>
+  )}
+
+  {results.length > 0 ? (
     <div class="grid">
       {results.map((p) => <ProduccionCard produccion={p} />)}
     </div>
   ) : (
     <EmptyState
-      title="Sin producciones"
-      message={
-        filtroEstado === 'todas'
-          ? 'No hay producciones todavía. Da de alta la primera.'
-          : `No hay producciones en estado "${filtroEstado.replace('_', ' ')}".`
-      }
+      title={search ? 'Sin resultados' : 'Sin producciones'}
+      message={search ? `Nada coincide con "${search}".` : 'No hay producciones en este filtro.'}
     />
   )}
 </Layout>
