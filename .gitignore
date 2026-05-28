@@ -12,3 +12,7 @@ npm-debug.log*
 .cache/
 .vscode/
 .idea/
+
+# Datos migrados (no versionar, contienen info sensible y se regeneran)
+migration-data.sql
+migration-data.sql.bak

@@ -79,3 +79,4 @@ Plataforma admin unificada del Universo FC Agency. Reemplaza las 5 plataformas s
 
 - **2026-05-14** — Scaffolding inicial: stack Astro+CF+D1+auth, layout, sidebar, Modelos funcional, placeholders.
 - **2026-05-27** — Análisis de las 4 plataformas viejas. Schema extendido con 10 migraciones nuevas (0007-0016): proveedores+lineas_produccion, trabajos_modelo, campañas, KPIs, castings, contacto_pasos, acciones_calendario, extensiones a modelos/briefs/contactos. Secciones construidas: Producciones, Briefs+Contenido, Contactos+CRM, Castings. Script de migración Firebase→D1.
+- **2026-05-28** — **EN PRODUCCIÓN.** URL: `https://admin-fcagency.contacto-4c8.workers.dev`. Cuenta CF separada para FC Agency. 370 filas migradas desde Firebase (147 modelos, 30 producciones, 73 contactos, etc.). Resend configurado. Admins Roberto y Fely activos. Las 4 plataformas viejas siguen vivas paralelo. Ver `PRODUCCION.md`.
