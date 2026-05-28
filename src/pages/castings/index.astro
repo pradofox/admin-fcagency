@@ -1,0 +1,160 @@
+---
+import Layout from '../../components/Layout.astro';
+import EmptyState from '../../components/EmptyState.astro';
+import { requireUser } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
+
+requireUser(Astro);
+const db = getDB(Astro);
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const cliente = (form.get('cliente') as string)?.trim();
+  if (!cliente) {
+    error = 'Cliente requerido.';
+  } else {
+    const id = newId();
+    const ts = now();
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+    const getNum = (k: string) => {
+      const v = form.get(k);
+      if (v === null || v === '') return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    await db
+      .prepare(
+        `INSERT INTO castings (
+          id, cliente, marca_id, tipo, fecha, hora, lugar, perfil, pago_modelo,
+          etapa, notas, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        id, cliente, get('marca_id'), get('tipo'), get('fecha'), get('hora'),
+        get('lugar'), get('perfil'), getNum('pago_modelo'),
+        get('etapa') ?? 'Abierto', get('notas'), ts, ts
+      )
+      .run();
+    return Astro.redirect('/castings');
+  }
+}
+
+const filtroEtapa = Astro.url.searchParams.get('etapa') ?? 'todos';
+const etapas = ['todos', 'Abierto', 'Selección', 'Confirmado', 'Realizado'];
+
+const sql = filtroEtapa === 'todos'
+  ? `SELECT id, cliente, marca_id, tipo, fecha, etapa, perfil FROM castings ORDER BY fecha DESC NULLS LAST LIMIT 200`
+  : `SELECT id, cliente, marca_id, tipo, fecha, etapa, perfil FROM castings WHERE etapa = ? ORDER BY fecha DESC NULLS LAST LIMIT 200`;
+const stmt = filtroEtapa === 'todos' ? db.prepare(sql) : db.prepare(sql).bind(filtroEtapa);
+const { results } = await stmt.all<any>();
+
+const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<{ id: string; nombre: string }>()).results ?? [];
+
+const chipEtapa: Record<string, string> = {
+  Abierto: 'chip',
+  'Selección': 'chip-warning',
+  Confirmado: 'chip-gold',
+  Realizado: 'chip-ok',
+  Cancelado: 'chip-danger'
+};
+---
+
+<Layout title="Castings" pageTitle="Castings">
+  <div class="page-head">
+    <h1>Castings</h1>
+  </div>
+
+  <div class="filters">
+    {etapas.map((e) => (
+      <a href={`/castings?etapa=${e}`} class={`filter-chip ${filtroEtapa === e ? 'active' : ''}`}>{e}</a>
+    ))}
+  </div>
+
+  {error && <p class="text-danger">{error}</p>}
+
+  <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:32px">
+    <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Nuevo casting</summary>
+    <form method="POST" action="/castings" style="margin-top:16px">
+      <label class="label">Cliente *</label>
+      <input class="input" name="cliente" required />
+
+      <div class="row">
+        <div class="col">
+          <label class="label">Marca</label>
+          <select class="select" name="marca_id">
+            <option value="">— sin asignar —</option>
+            {marcas.map((m) => <option value={m.id}>{m.nombre}</option>)}
+          </select>
+        </div>
+        <div class="col">
+          <label class="label">Tipo</label>
+          <select class="select" name="tipo">
+            <option value="">— sin asignar —</option>
+            {['Editorial', 'Comercial', 'Pasarela', 'Video', 'Fitting', 'Evento', 'Otro'].map((t) => (
+              <option value={t}>{t}</option>
+            ))}
+          </select>
+        </div>
+        <div class="col">
+          <label class="label">Etapa</label>
+          <select class="select" name="etapa">
+            {['Abierto', 'Selección', 'Confirmado', 'Realizado', 'Cancelado'].map((e) => (
+              <option value={e}>{e}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col">
+          <label class="label">Fecha</label>
+          <input class="input" type="date" name="fecha" />
+        </div>
+        <div class="col">
+          <label class="label">Hora</label>
+          <input class="input" type="time" name="hora" />
+        </div>
+        <div class="col">
+          <label class="label">Lugar</label>
+          <input class="input" name="lugar" />
+        </div>
+        <div class="col">
+          <label class="label">Pago modelo (MXN)</label>
+          <input class="input" type="number" step="0.01" name="pago_modelo" />
+        </div>
+      </div>
+
+      <label class="label">Perfil buscado</label>
+      <textarea class="textarea" name="perfil" placeholder="Ej. mujer 22-28, 1.75+, sport-luxury"></textarea>
+
+      <label class="label">Notas</label>
+      <textarea class="textarea" name="notas"></textarea>
+
+      <button type="submit" class="btn btn-primary" style="margin-top:16px">Crear casting</button>
+    </form>
+  </details>
+
+  {results && results.length > 0 ? (
+    <div class="grid">
+      {results.map((c: any) => (
+        <article class="card">
+          <div class="card-title">{c.cliente}</div>
+          <div class="card-meta">
+            <span class={`chip ${chipEtapa[c.etapa] ?? ''}`}>{c.etapa}</span>
+            {c.marca_id && <span>{c.marca_id}</span>}
+            {c.tipo && <span>{c.tipo}</span>}
+            {c.fecha && <span class="text-muted">{c.fecha}</span>}
+          </div>
+          {c.perfil && <p class="text-muted" style="font-size:12px;margin-top:10px">{c.perfil}</p>}
+        </article>
+      ))}
+    </div>
+  ) : (
+    <EmptyState title="Sin castings" message="No hay castings con esta etapa. Crea uno nuevo." />
+  )}
+</Layout>

@@ -1,80 +1,90 @@
 # Plan de construcción admin-fcagency
 
-## Fase 0 — Diseño de datos y roles ✅ HECHA (hipótesis)
+## Fase 0 — Diseño de datos y roles ✅ HECHA
 
-Schema inicial con 11 tablas: `users`, `sessions`, `auth_tokens`, `marcas`, `modelos`, `clientes`, `producciones`, `bookings`, `briefs`, `piezas_contenido`, `contactos`.
+Schema final con 16 migraciones, 17 tablas relacionales validadas contra el comportamiento real de las 4 plataformas viejas.
 
-3 roles: `admin`, `editor`, `viewer`. Cada user tiene un campo `marcas` (JSON array) que limita a qué marcas tiene acceso.
+Roles: `admin`, `editor`, `viewer`. Cada user tiene un campo `marcas` (JSON array) que limita scope.
 
-⚠️ **Las definiciones de Fase 0 son hipótesis basadas en lo que sabemos de las 5 plataformas viejas.** Hay que validarlas con Fely respondiendo `PREGUNTAS-FELY.md`. Si alguna respuesta rompe el modelo, ajustamos schema con una nueva migration (nunca editar las viejas).
+Ver `DESCUBRIMIENTOS.md` para el análisis profundo que validó el schema.
 
 ## Fase 1 — Scaffolding ✅ HECHA
 
-- Astro + CF + D1 + auth custom
-- Layout, sidebar, 7 secciones (1 funcional, 5 placeholder + dashboard)
-- Modelos end-to-end (lista + alta + edit + eliminar + filtros)
-- Documentación completa
+- Astro + CF + D1 + auth custom magic link
+- Layout, sidebar con 8 secciones
+- Documentación completa (CLAUDE, ARQUITECTURA, DESCUBRIMIENTOS, PREGUNTAS, README, este PLAN)
 
-## Fase 2 — Migrar secciones una por una
+## Fase 2 — Secciones funcionales ✅ HECHA (en greenfield)
 
-Una sección por iteración, en orden sugerido:
+Todas las secciones tienen UI funcional construida espejando los flujos reales de las plataformas viejas:
 
-1. **Producciones** — la usa Vic. Conecta con Modelos vía bookings. Migrar datos de Firebase `/producciones/`.
-2. **Briefs + Piezas de contenido** — la usa Andrea. Migrar `/andrea/briefs/` y `/andrea/contenido/`. Conectar con marcas.
-3. **Contactos / CRM** — flujos por tipo (cliente, modelo, proveedor, aspirante). Cross-marca. Migrar contactos de las 4 plataformas viejas, deduplicar.
-4. **Community** — la usa Renata. Definir mejor el modelo antes de migrar (qué hace exactamente community management hoy).
-5. **Clientes** — extraer de los datos actuales, deduplicar contra contactos tipo `cliente`.
+- **Modelos** — lista con filtros, alta, edit, eliminar. Schema extendido con polas/book/videocasting/sitio_web/drive_folder/última_junta.
+- **Producciones** — lista con filtros, alta, edit, eliminar + **gestión de líneas de proveedores** con cobro/comisión/pago calculado automático + semáforo pendiente/pagado/cancelado por línea. Reemplaza el patrón 80/20 hardcoded de Vic.
+- **Castings** — lista con filtros por etapa + alta inline. Reemplaza el módulo de castings de Renata.
+- **Briefs** — lista con filtros por estado y marca, alta, edit + **autocrea pieza de contenido** al guardar brief con fecha de publicación (replicando el flujo de Andrea).
+- **Contenido** — calendario de piezas con filtros por estado.
+- **Contactos / CRM** — lista con filtros por tipo y estatus, alta inicializando pasos según tipo, detalle con **checklist de pasos + semáforos de pago/material/retro + estatus CRM editable + próximas acciones**.
+- **Clientes** — placeholder (esquema listo, UI pendiente).
+- **Dashboard** — métricas reales: modelos activas, producciones en curso, castings abiertos, briefs vivos, piezas por publicar, contactos con pago pendiente, próximas acciones cross-sección.
 
-Cada sección incluye:
-- Schema (si extiende el actual)
-- UI: lista, nuevo, detalle
-- API endpoints si aplica
-- Script de migración de datos desde Firebase actual
-- Test con la persona que la usa
-- Sunset (redirect 301) de la plataforma vieja correspondiente
+## Fase 3 — Migración de datos desde Firebase ✅ SCRIPT LISTO
 
-**Estimado realista por sección con dos Claudes Code en paralelo:** 2-3 días de trabajo activo.
+`scripts/migrate-from-firebase.mjs` lee los paths `producciones/`, `andrea/`, `tracker/`, `models/` y genera SQL listo para aplicar a D1.
 
-## Fase 3 — Sunset platforms viejas
+Maneja normalizaciones:
+- Marca: `FCLINE`/`FC Line`/`FCLine` → `fc-line`, `ALEAMODA`/`Aleamoda` → `aleamoda`
+- Medidas: `"1.70 cm"` → `170` (INTEGER cm)
+- Estados de modelo: `En desarrollo` → `aspirante`
+- Estatus CRM: convierte texto humano a snake_case del CHECK
+- Boolean: `"Sí"` → `1`
 
-- Los 5 sitios Netlify viejos hacen redirect 301 a `admin.fcagency.mx/<seccion>`
-- Firebase queda como backup leído pero no escrito
-- Después de 30 días sin reportes, apagar Firebase RTDB
-- Borrar repos viejos o archivarlos en GitHub
+Pendiente confirmar con Fely:
+- Archivo `models_data.js` del repo model-operation (seed inicial del roster). Sin él la migración importa solo los modelos que ya viven en Firebase.
+- Catálogo exacto de pasos del CRM por tipo (hoy hay un tentativo en `src/lib/crm-pasos.ts`).
 
-## Pendientes inmediatos para arrancar
+Para correr:
+```bash
+npm run migrate:firebase
+# Genera migration-data.sql en raíz
+# Revisar el SQL antes de aplicar
+npx wrangler d1 execute fc-admin --local --file=migration-data.sql
+```
 
-Antes de poder correr la plataforma:
+## Fase 4 — Sunset platforms viejas (pendiente)
 
-1. **Transferir repo** de `pradofox/admin-fcagency` a `FC-Agency/admin-fcagency` (Roberto, 1 click en GitHub).
-2. **Crear D1 en Cloudflare:**
-   ```bash
-   npx wrangler d1 create fc-admin
-   ```
-   Copiar el `database_id` que imprime y pegarlo en `wrangler.toml`.
-3. **Correr migraciones locales:**
-   ```bash
-   npm install
-   npm run db:migrate:local
-   ```
-4. **Crear admin para login:**
-   ```bash
-   npm run seed:admin -- felicia@fcagency.mx "Felicia"
-   npm run seed:admin -- roberto@sopadeletras.art "Roberto Prado"
-   ```
-5. **Probar:**
-   ```bash
-   npm run dev
-   ```
-   Ir a http://localhost:4321 → /login → poner email → ver el magic link en consola → click.
+Una vez admin-fcagency esté corriendo con datos migrados y el equipo lo esté usando:
 
-## Decisiones pendientes (necesitan respuesta de Fely)
+1. Los 5 sitios Netlify viejos hacen redirect 301 a `admin.fcagency.mx/<seccion>`
+2. Firebase queda como backup leído pero no escrito
+3. Después de 30 días sin reportes, apagar Firebase RTDB
+4. Archivar repos viejos en GitHub
 
-Ver `PREGUNTAS-FELY.md`.
+## Pendientes inmediatos para arrancar localmente
+
+```bash
+git clone https://github.com/pradofox/admin-fcagency.git
+cd admin-fcagency
+npm install
+npx wrangler login
+npx wrangler d1 create fc-admin
+# pegar database_id en wrangler.toml
+npm run db:migrate:local
+npm run seed:admin -- tu@email.com "Tu Nombre"
+npm run dev
+# http://localhost:4321
+```
+
+## Decisiones pendientes con Fely
+
+Ver `DESCUBRIMIENTOS.md` sección "DECISIÓN PENDIENTE" y `PREGUNTAS-FELY.md`.
+
+Las más críticas:
+1. Catálogo real de pasos del CRM por tipo
+2. Archivo `models_data.js` con seed del roster
+3. ¿Comisión 80/20 fija o configurable? (ya configurable en schema, default 20)
+4. ¿Checklist de Andrea global o por pieza? (decisión arquitectónica)
 
 ## Riesgos conocidos
 
-- **Migración de datos viejos:** el schema relacional puede no encajar 1:1 con los árboles Firebase. Habrá que escribir scripts de transformación.
-- **Datos sensibles de modelos:** bajo LFPDPPP, hay que documentar consentimiento y purpose limitation. La plataforma cerrada con auth ya mitiga gran parte del riesgo.
-- **Performance:** D1 es lento en cold start (~100ms). Si llega a doler, hay que considerar cache con KV o Workers cache.
-- **Realtime:** D1 no tiene listeners como Firebase RTDB. Si una pantalla necesita updates en vivo (ej. calendario compartido editado por dos personas a la vez), hay que pollear o agregar Durable Objects. La mayoría de pantallas NO necesitan realtime.
+- **Migración 1:1:** algunos campos del Firebase actual son strings libres ambiguos (modelo, cliente, prod). El script los preserva pero no los correlaciona. Una segunda pasada manual (o asistida por Claude Code) puede deduplicar.
+- **No probé `npm install` ni `npm run build`** en este scaffolding. Habrá 1-2 errores típicos de TypeScript en el primer build que se arreglan en minutos.

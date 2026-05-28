@@ -9,7 +9,8 @@
     "deploy": "npm run build && wrangler deploy",
     "db:migrate:local": "for f in migrations/*.sql; do wrangler d1 execute fc-admin --local --file=$f; done",
     "db:migrate:prod": "for f in migrations/*.sql; do wrangler d1 execute fc-admin --remote --file=$f; done",
-    "seed:admin": "node scripts/seed-admin.mjs"
+    "seed:admin": "node scripts/seed-admin.mjs",
+    "migrate:firebase": "node scripts/migrate-from-firebase.mjs > migration-data.sql"
   },
   "dependencies": {
     "astro": "^4.16.0",

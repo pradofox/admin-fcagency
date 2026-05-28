@@ -1,14 +1,68 @@
 ---
 import Layout from '../../components/Layout.astro';
+import ProduccionCard from '../../components/producciones/ProduccionCard.astro';
 import EmptyState from '../../components/EmptyState.astro';
 import { requireUser } from '../../lib/session';
+import { getDB } from '../../lib/db';
+
 requireUser(Astro);
+const db = getDB(Astro);
+
+const filtroEstado = Astro.url.searchParams.get('estado') ?? 'todas';
+const filtros = ['todas', 'planeacion', 'confirmada', 'en_curso', 'completada'];
+
+const sql =
+  filtroEstado === 'todas'
+    ? `SELECT p.id, p.titulo, p.marca_id, p.fecha_inicio, p.estado, p.ubicacion_shoot,
+              (SELECT SUM(lp.cobro_cliente) FROM lineas_produccion lp WHERE lp.produccion_id = p.id) as total_cobro
+       FROM producciones p
+       ORDER BY p.fecha_inicio DESC NULLS LAST, p.created_at DESC
+       LIMIT 200`
+    : `SELECT p.id, p.titulo, p.marca_id, p.fecha_inicio, p.estado, p.ubicacion_shoot,
+              (SELECT SUM(lp.cobro_cliente) FROM lineas_produccion lp WHERE lp.produccion_id = p.id) as total_cobro
+       FROM producciones p
+       WHERE p.estado = ?
+       ORDER BY p.fecha_inicio DESC NULLS LAST, p.created_at DESC
+       LIMIT 200`;
+
+const stmt = filtroEstado === 'todas' ? db.prepare(sql) : db.prepare(sql).bind(filtroEstado);
+const { results } = await stmt.all<{
+  id: string;
+  titulo: string;
+  marca_id: string | null;
+  fecha_inicio: string | null;
+  estado: string;
+  ubicacion_shoot: string | null;
+  total_cobro: number | null;
+}>();
 ---
 
 <Layout title="Producciones" pageTitle="Producciones">
-  <div class="page-head"><h1>Producciones</h1></div>
-  <EmptyState
-    title="Próximamente"
-    message="Esta sección se construye en la Fase 2. Migra el flujo de Vic desde fcagency-produ.netlify.app. Incluye gestión de producciones, asignación de modelos vía bookings, calendario y conexión con clientes."
-  />
+  <div class="page-head">
+    <h1>Producciones</h1>
+    <a href="/producciones/nuevo" class="btn btn-primary">+ Nueva</a>
+  </div>
+
+  <div class="filters">
+    {filtros.map((f) => (
+      <a href={`/producciones?estado=${f}`} class={`filter-chip ${filtroEstado === f ? 'active' : ''}`}>
+        {f.replace('_', ' ')}
+      </a>
+    ))}
+  </div>
+
+  {results && results.length > 0 ? (
+    <div class="grid">
+      {results.map((p) => <ProduccionCard produccion={p} />)}
+    </div>
+  ) : (
+    <EmptyState
+      title="Sin producciones"
+      message={
+        filtroEstado === 'todas'
+          ? 'No hay producciones todavía. Da de alta la primera.'
+          : `No hay producciones en estado "${filtroEstado.replace('_', ' ')}".`
+      }
+    />
+  )}
 </Layout>

@@ -1,0 +1,246 @@
+---
+import Layout from '../../components/Layout.astro';
+import { requireUser } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+
+requireUser(Astro);
+const db = getDB(Astro);
+const { id } = Astro.params;
+
+let saved = false;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const method = form.get('_method');
+  const action = form.get('_action');
+
+  if (method === 'DELETE') {
+    await db.prepare('DELETE FROM contactos WHERE id = ?').bind(id).run();
+    return Astro.redirect('/contactos');
+  }
+
+  if (action === 'toggle_paso') {
+    const pasoId = form.get('paso_id') as string;
+    const done = form.get('done') === '1' ? 0 : 1;
+    await db
+      .prepare('UPDATE contacto_pasos SET done = ?, completed_at = ? WHERE id = ? AND contacto_id = ?')
+      .bind(done, done ? now() : null, pasoId, id)
+      .run();
+    return Astro.redirect(`/contactos/${id}`);
+  }
+
+  if (action === 'update_semaforo') {
+    const field = form.get('field') as string;
+    const value = form.get('value') as string;
+    const allowed = ['pago_cliente_estado', 'pago_modelo_estado', 'material_recibido', 'retro_enviada', 'estatus_crm'];
+    if (allowed.includes(field)) {
+      await db.prepare(`UPDATE contactos SET ${field} = ?, updated_at = ? WHERE id = ?`).bind(value, now(), id).run();
+    }
+    return Astro.redirect(`/contactos/${id}`);
+  }
+
+  // Update general
+  const get = (k: string) => {
+    const v = form.get(k);
+    return v === null || v === '' ? null : String(v).trim();
+  };
+  await db
+    .prepare(
+      `UPDATE contactos SET
+        nombre = ?, email = ?, whatsapp = ?, empresa = ?, notas = ?, marca_id = ?,
+        canal = ?, next_action_date = ?, next_action_text = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(
+      get('nombre') ?? '', get('email'), get('whatsapp'), get('empresa'), get('notas'),
+      get('marca_id'), get('canal'), get('next_action_date'), get('next_action_text'),
+      now(), id
+    )
+    .run();
+  saved = true;
+}
+
+const contacto = await db.prepare('SELECT * FROM contactos WHERE id = ?').bind(id).first<any>();
+if (!contacto) return Astro.redirect('/contactos');
+
+const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<{ id: string; nombre: string }>()).results ?? [];
+const { results: pasos } = await db
+  .prepare('SELECT id, paso_idx, paso_texto, done FROM contacto_pasos WHERE contacto_id = ? ORDER BY paso_idx')
+  .bind(id)
+  .all<{ id: string; paso_idx: number; paso_texto: string; done: number }>();
+
+const pasosCompletados = (pasos ?? []).filter((p) => p.done).length;
+const pasosTotal = (pasos ?? []).length;
+const progresoPct = pasosTotal ? Math.round((pasosCompletados / pasosTotal) * 100) : 0;
+---
+
+<Layout title={contacto.nombre} pageTitle={contacto.nombre}>
+  <div class="page-head">
+    <h1>{contacto.nombre}</h1>
+    <div style="display:flex;gap:10px">
+      <a href="/contactos" class="btn btn-sm">Volver</a>
+      <form method="POST" action={`/contactos/${id}`} onsubmit="return confirm('¿Eliminar contacto?')" style="display:inline">
+        <input type="hidden" name="_method" value="DELETE" />
+        <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
+      </form>
+    </div>
+  </div>
+
+  {saved && <p class="text-ok" style="margin-bottom:20px">Guardado.</p>}
+
+  <div class="row" style="margin-bottom:32px">
+    <div class="col card">
+      <div class="card-meta">Tipo</div>
+      <div class="card-title">{contacto.tipo}</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Estatus</div>
+      <form method="POST" action={`/contactos/${id}`} style="margin-top:8px">
+        <input type="hidden" name="_action" value="update_semaforo" />
+        <input type="hidden" name="field" value="estatus_crm" />
+        <select class="select" name="value" onchange="this.form.submit()" style="font-size:13px">
+          {['nuevo_contacto', 'cotizacion_enviada', 'en_negociacion', 'confirmado', 'en_produccion', 'post_produccion', 'pago_pendiente', 'cerrado'].map((e) => (
+            <option value={e} selected={contacto.estatus_crm === e}>{e.replace(/_/g, ' ')}</option>
+          ))}
+        </select>
+      </form>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Progreso</div>
+      <div class="card-title" style="color:var(--gold)">{progresoPct}%</div>
+      <small>{pasosCompletados} / {pasosTotal} pasos</small>
+    </div>
+  </div>
+
+  {/* Semáforos de post-producción */}
+  <h2>Estado de post-producción</h2>
+  <div class="row" style="margin-bottom:32px">
+    <div class="col card">
+      <div class="card-meta">Pago cliente</div>
+      <form method="POST" action={`/contactos/${id}`} style="margin-top:8px">
+        <input type="hidden" name="_action" value="update_semaforo" />
+        <input type="hidden" name="field" value="pago_cliente_estado" />
+        <select class="select" name="value" onchange="this.form.submit()" style="font-size:13px">
+          {['pendiente', 'anticipo_recibido', 'pagado', 'no_aplica'].map((e) => (
+            <option value={e} selected={contacto.pago_cliente_estado === e}>{e.replace(/_/g, ' ')}</option>
+          ))}
+        </select>
+      </form>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Pago modelo</div>
+      <form method="POST" action={`/contactos/${id}`} style="margin-top:8px">
+        <input type="hidden" name="_action" value="update_semaforo" />
+        <input type="hidden" name="field" value="pago_modelo_estado" />
+        <select class="select" name="value" onchange="this.form.submit()" style="font-size:13px">
+          {['por_pagar', 'pagado', 'no_aplica'].map((e) => (
+            <option value={e} selected={contacto.pago_modelo_estado === e}>{e.replace(/_/g, ' ')}</option>
+          ))}
+        </select>
+      </form>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Material</div>
+      <form method="POST" action={`/contactos/${id}`} style="margin-top:8px">
+        <input type="hidden" name="_action" value="update_semaforo" />
+        <input type="hidden" name="field" value="material_recibido" />
+        <select class="select" name="value" onchange="this.form.submit()" style="font-size:13px">
+          <option value="0" selected={!contacto.material_recibido}>Pendiente</option>
+          <option value="1" selected={!!contacto.material_recibido}>Recibido</option>
+        </select>
+      </form>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Retro</div>
+      <form method="POST" action={`/contactos/${id}`} style="margin-top:8px">
+        <input type="hidden" name="_action" value="update_semaforo" />
+        <input type="hidden" name="field" value="retro_enviada" />
+        <select class="select" name="value" onchange="this.form.submit()" style="font-size:13px">
+          <option value="0" selected={!contacto.retro_enviada}>Pendiente</option>
+          <option value="1" selected={!!contacto.retro_enviada}>Enviada</option>
+        </select>
+      </form>
+    </div>
+  </div>
+
+  <h2>Pasos del flujo</h2>
+  <div style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:32px">
+    {pasos && pasos.length > 0 ? (
+      pasos.map((p) => (
+        <form method="POST" action={`/contactos/${id}`} style="display:block;padding:8px 0;border-bottom:1px solid var(--border)">
+          <input type="hidden" name="_action" value="toggle_paso" />
+          <input type="hidden" name="paso_id" value={p.id} />
+          <input type="hidden" name="done" value={p.done ? '1' : '0'} />
+          <button type="submit" style="background:transparent;border:0;color:inherit;cursor:pointer;display:flex;align-items:center;gap:12px;width:100%;text-align:left;font-family:inherit;font-size:14px">
+            <span style={`display:inline-block;width:16px;height:16px;border:1px solid ${p.done ? 'var(--ok)' : 'var(--border)'};background:${p.done ? 'var(--ok)' : 'transparent'};text-align:center;line-height:14px;color:#000;font-size:11px;font-weight:bold`}>
+              {p.done ? '✓' : ''}
+            </span>
+            <span style={p.done ? 'color:var(--text-2);text-decoration:line-through' : ''}>{p.paso_texto}</span>
+          </button>
+        </form>
+      ))
+    ) : (
+      <p class="text-muted">Sin pasos configurados para este tipo de contacto.</p>
+    )}
+  </div>
+
+  <h2>Datos generales</h2>
+  <form method="POST" action={`/contactos/${id}`}>
+    <label class="label">Nombre</label>
+    <input class="input" name="nombre" value={contacto.nombre} required />
+
+    <div class="row">
+      <div class="col">
+        <label class="label">Marca</label>
+        <select class="select" name="marca_id">
+          <option value="">— sin asignar —</option>
+          {marcas.map((m) => (
+            <option value={m.id} selected={contacto.marca_id === m.id}>{m.nombre}</option>
+          ))}
+        </select>
+      </div>
+      <div class="col">
+        <label class="label">Canal</label>
+        <select class="select" name="canal">
+          <option value="">— sin asignar —</option>
+          {['Instagram', 'WhatsApp', 'Correo', 'Referido'].map((c) => (
+            <option value={c} selected={contacto.canal === c}>{c}</option>
+          ))}
+        </select>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col">
+        <label class="label">Email</label>
+        <input class="input" type="email" name="email" value={contacto.email ?? ''} />
+      </div>
+      <div class="col">
+        <label class="label">WhatsApp</label>
+        <input class="input" name="whatsapp" value={contacto.whatsapp ?? ''} />
+      </div>
+      <div class="col">
+        <label class="label">Empresa</label>
+        <input class="input" name="empresa" value={contacto.empresa ?? ''} />
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col">
+        <label class="label">Próxima acción — fecha</label>
+        <input class="input" type="date" name="next_action_date" value={contacto.next_action_date ?? ''} />
+      </div>
+      <div class="col">
+        <label class="label">Próxima acción — descripción</label>
+        <input class="input" name="next_action_text" value={contacto.next_action_text ?? ''} />
+      </div>
+    </div>
+
+    <label class="label">Notas</label>
+    <textarea class="textarea" name="notas">{contacto.notas ?? ''}</textarea>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Guardar cambios</button>
+    </div>
+  </form>
+</Layout>

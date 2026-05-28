@@ -2,13 +2,82 @@
 import Layout from '../../components/Layout.astro';
 import EmptyState from '../../components/EmptyState.astro';
 import { requireUser } from '../../lib/session';
+import { getDB } from '../../lib/db';
+
 requireUser(Astro);
+const db = getDB(Astro);
+
+const filtroEstado = Astro.url.searchParams.get('estado') ?? 'todos';
+const filtroMarca = Astro.url.searchParams.get('marca') ?? 'todas';
+const estados = ['todos', 'idea', 'aprobado', 'produccion', 'publicado'];
+
+const where: string[] = [];
+const params: string[] = [];
+if (filtroEstado !== 'todos') { where.push('estado = ?'); params.push(filtroEstado); }
+if (filtroMarca !== 'todas') { where.push('marca_id = ?'); params.push(filtroMarca); }
+
+const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+const stmt = db.prepare(
+  `SELECT id, titulo, marca_id, pilar, formato, plataforma, fecha_publicacion, deadline, estado, creador_asignado
+   FROM briefs ${whereClause}
+   ORDER BY fecha_publicacion DESC NULLS LAST, created_at DESC
+   LIMIT 200`
+);
+const { results } = await (params.length ? stmt.bind(...params) : stmt).all<any>();
+
+const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<{ id: string; nombre: string }>()).results ?? [];
+
+const chipEstado: Record<string, string> = {
+  idea: 'chip',
+  aprobado: 'chip-gold',
+  produccion: 'chip-warning',
+  publicado: 'chip-ok',
+  archivado: 'chip-danger'
+};
 ---
 
 <Layout title="Briefs" pageTitle="Briefs">
-  <div class="page-head"><h1>Briefs</h1></div>
-  <EmptyState
-    title="Próximamente"
-    message="Esta sección se construye en la Fase 2. Migra el flujo de Andrea desde fcagency-brand-content.netlify.app. Briefs por marca, calendario de publicaciones, conexión con piezas de contenido."
-  />
+  <div class="page-head">
+    <h1>Briefs</h1>
+    <a href="/briefs/nuevo" class="btn btn-primary">+ Nuevo</a>
+  </div>
+
+  <div class="filters">
+    {estados.map((e) => (
+      <a href={`/briefs?estado=${e}${filtroMarca !== 'todas' ? `&marca=${filtroMarca}` : ''}`}
+         class={`filter-chip ${filtroEstado === e ? 'active' : ''}`}>{e}</a>
+    ))}
+  </div>
+
+  <div class="filters">
+    <a href={`/briefs${filtroEstado !== 'todos' ? `?estado=${filtroEstado}` : ''}`}
+       class={`filter-chip ${filtroMarca === 'todas' ? 'active' : ''}`}>todas</a>
+    {marcas.map((m) => (
+      <a href={`/briefs?marca=${m.id}${filtroEstado !== 'todos' ? `&estado=${filtroEstado}` : ''}`}
+         class={`filter-chip ${filtroMarca === m.id ? 'active' : ''}`}>{m.nombre}</a>
+    ))}
+  </div>
+
+  {results && results.length > 0 ? (
+    <div class="grid">
+      {results.map((b: any) => (
+        <a href={`/briefs/${b.id}`} style="display:block;color:inherit;text-decoration:none">
+          <article class="card">
+            <div class="card-title">{b.titulo}</div>
+            <div class="card-meta">
+              <span class={`chip ${chipEstado[b.estado] ?? ''}`}>{b.estado}</span>
+              {b.marca_id && <span>{b.marca_id}</span>}
+              {b.pilar && <span>{b.pilar}</span>}
+              {b.formato && <span>{b.formato}</span>}
+              {b.plataforma && <span>{b.plataforma}</span>}
+              {b.fecha_publicacion && <span class="text-muted">publica {b.fecha_publicacion}</span>}
+              {b.creador_asignado && <span class="text-muted">→ {b.creador_asignado}</span>}
+            </div>
+          </article>
+        </a>
+      ))}
+    </div>
+  ) : (
+    <EmptyState title="Sin briefs" message="No hay briefs con esos filtros." />
+  )}
 </Layout>

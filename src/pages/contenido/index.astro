@@ -2,13 +2,64 @@
 import Layout from '../../components/Layout.astro';
 import EmptyState from '../../components/EmptyState.astro';
 import { requireUser } from '../../lib/session';
+import { getDB } from '../../lib/db';
+
 requireUser(Astro);
+const db = getDB(Astro);
+
+const filtroEstado = Astro.url.searchParams.get('estado') ?? 'todos';
+const estados = ['todos', 'programado', 'En producción', 'En revisión', 'Aprobado', 'Publicado'];
+
+const sql = filtroEstado === 'todos'
+  ? `SELECT id, titulo, marca_id, formato, plataforma, pilar, fecha_programada, fecha_publicada, estado
+     FROM piezas_contenido ORDER BY fecha_programada ASC NULLS LAST LIMIT 200`
+  : `SELECT id, titulo, marca_id, formato, plataforma, pilar, fecha_programada, fecha_publicada, estado
+     FROM piezas_contenido WHERE estado = ? ORDER BY fecha_programada ASC NULLS LAST LIMIT 200`;
+const stmt = filtroEstado === 'todos' ? db.prepare(sql) : db.prepare(sql).bind(filtroEstado);
+const { results } = await stmt.all<any>();
+
+const chipEstado: Record<string, string> = {
+  programado: 'chip',
+  'En producción': 'chip-warning',
+  'En revisión': 'chip-warning',
+  Aprobado: 'chip-gold',
+  Publicado: 'chip-ok'
+};
 ---
 
 <Layout title="Contenido" pageTitle="Contenido">
-  <div class="page-head"><h1>Contenido</h1></div>
-  <EmptyState
-    title="Próximamente"
-    message="Esta sección se construye en la Fase 2. Piezas de contenido derivadas de briefs, calendario por marca, plataforma de publicación, estado de cada pieza."
-  />
+  <div class="page-head">
+    <h1>Contenido</h1>
+  </div>
+
+  <p class="text-muted" style="font-size:12px;margin-bottom:24px">
+    Las piezas de contenido se crean automáticamente al guardar un brief con fecha de publicación.
+    Edita el brief para modificar sus piezas.
+  </p>
+
+  <div class="filters">
+    {estados.map((e) => (
+      <a href={`/contenido?estado=${e}`} class={`filter-chip ${filtroEstado === e ? 'active' : ''}`}>{e}</a>
+    ))}
+  </div>
+
+  {results && results.length > 0 ? (
+    <div class="grid">
+      {results.map((p: any) => (
+        <article class="card">
+          <div class="card-title" style="font-size:14px">{p.titulo}</div>
+          <div class="card-meta">
+            <span class={`chip ${chipEstado[p.estado] ?? ''}`}>{p.estado}</span>
+            {p.marca_id && <span>{p.marca_id}</span>}
+            {p.formato && <span>{p.formato}</span>}
+            {p.plataforma && <span>{p.plataforma}</span>}
+            {p.pilar && <span>{p.pilar}</span>}
+            {p.fecha_programada && <span class="text-muted">{p.fecha_programada}</span>}
+          </div>
+        </article>
+      ))}
+    </div>
+  ) : (
+    <EmptyState title="Sin piezas" message="No hay piezas de contenido todavía. Crea un brief con fecha de publicación para generar la primera." />
+  )}
 </Layout>

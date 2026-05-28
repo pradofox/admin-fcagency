@@ -1,0 +1,75 @@
+---
+import Layout from '../../components/Layout.astro';
+import ProduccionForm from '../../components/producciones/ProduccionForm.astro';
+import { requireUser } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
+
+requireUser(Astro);
+const db = getDB(Astro);
+
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const titulo = (form.get('titulo') as string)?.trim();
+  if (!titulo) {
+    error = 'El título es obligatorio.';
+  } else {
+    const id = newId();
+    const ts = now();
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+    const getNum = (k: string) => {
+      const v = form.get(k);
+      if (v === null || v === '') return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    await db
+      .prepare(
+        `INSERT INTO producciones (
+          id, titulo, cliente_id, marca_id, fecha_inicio, fecha_fin,
+          hora_inicio, hora_fin, ubicacion_mua, ubicacion_shoot, ubicacion,
+          estado, presupuesto, notas, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        id,
+        titulo,
+        get('cliente_id'),
+        get('marca_id'),
+        get('fecha_inicio'),
+        get('fecha_fin'),
+        get('hora_inicio'),
+        get('hora_fin'),
+        get('ubicacion_mua'),
+        get('ubicacion_shoot'),
+        null,
+        get('estado') ?? 'planeacion',
+        getNum('presupuesto'),
+        get('notas'),
+        ts,
+        ts
+      )
+      .run();
+    return Astro.redirect(`/producciones/${id}`);
+  }
+}
+
+const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<{ id: string; nombre: string }>()).results ?? [];
+const clientes = (await db.prepare('SELECT id, nombre FROM clientes ORDER BY nombre').all<{ id: string; nombre: string }>()).results ?? [];
+---
+
+<Layout title="Nueva producción" pageTitle="Nueva producción">
+  <div class="page-head">
+    <h1>Nueva producción</h1>
+    <a href="/producciones" class="btn btn-sm">Volver</a>
+  </div>
+
+  {error && <p class="text-danger">{error}</p>}
+
+  <ProduccionForm marcas={marcas} clientes={clientes} action="/producciones/nuevo" submitLabel="Crear producción" />
+</Layout>

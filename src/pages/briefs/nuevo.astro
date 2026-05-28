@@ -1,0 +1,81 @@
+---
+import Layout from '../../components/Layout.astro';
+import BriefForm from '../../components/briefs/BriefForm.astro';
+import { requireUser } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
+
+const user = requireUser(Astro);
+const db = getDB(Astro);
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const titulo = (form.get('titulo') as string)?.trim();
+  if (!titulo) {
+    error = 'El título es obligatorio.';
+  } else {
+    const id = newId();
+    const ts = now();
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+
+    await db
+      .prepare(
+        `INSERT INTO briefs (
+          id, titulo, marca_id, pilar, descripcion, objetivo, audiencia, cta, copy,
+          hashtags, musica, refs_visuales, creador_asignado, deadline,
+          formato, fecha_publicacion, plataforma, estado, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        id, titulo, get('marca_id'), get('pilar'), get('descripcion'), get('objetivo'),
+        get('audiencia'), get('cta'), get('copy'), get('hashtags'), get('musica'),
+        get('refs_visuales'), get('creador_asignado'), get('deadline'),
+        get('formato'), get('fecha_publicacion'), get('plataforma'),
+        get('estado') ?? 'idea', user.id, ts, ts
+      )
+      .run();
+
+    // Auto-crear pieza de contenido (replicando el flujo de Andrea en brand-content)
+    if (get('fecha_publicacion')) {
+      const piezaId = newId();
+      await db
+        .prepare(
+          `INSERT INTO piezas_contenido (
+            id, brief_id, marca_id, titulo, formato, plataforma, pilar,
+            fecha_programada, estado, notas, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'programado', ?, ?, ?)`
+        )
+        .bind(
+          piezaId, id, get('marca_id'), titulo, get('formato'), get('plataforma'), get('pilar'),
+          get('fecha_publicacion'),
+          `Auto-creada al guardar brief. Creador: ${get('creador_asignado') ?? '—'}`,
+          ts, ts
+        )
+        .run();
+    }
+
+    return Astro.redirect(`/briefs/${id}`);
+  }
+}
+
+const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<{ id: string; nombre: string }>()).results ?? [];
+---
+
+<Layout title="Nuevo brief" pageTitle="Nuevo brief">
+  <div class="page-head">
+    <h1>Nuevo brief</h1>
+    <a href="/briefs" class="btn btn-sm">Volver</a>
+  </div>
+
+  <p class="text-muted" style="font-size:12px;margin-bottom:24px">
+    Al guardar, se crea automáticamente una pieza de contenido en el calendario si se especifica fecha de publicación.
+  </p>
+
+  {error && <p class="text-danger">{error}</p>}
+
+  <BriefForm marcas={marcas} action="/briefs/nuevo" submitLabel="Crear brief" />
+</Layout>

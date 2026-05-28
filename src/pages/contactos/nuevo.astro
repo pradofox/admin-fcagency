@@ -1,0 +1,136 @@
+---
+import Layout from '../../components/Layout.astro';
+import { requireUser } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
+import { pasosParaTipo } from '../../lib/crm-pasos';
+
+requireUser(Astro);
+const db = getDB(Astro);
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const nombre = (form.get('nombre') as string)?.trim();
+  const tipo = (form.get('tipo') as string)?.trim();
+  if (!nombre || !tipo) {
+    error = 'Nombre y tipo son obligatorios.';
+  } else {
+    const id = newId();
+    const ts = now();
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+    await db
+      .prepare(
+        `INSERT INTO contactos (
+          id, nombre, tipo, email, whatsapp, empresa, notas, marca_id,
+          canal, estatus_crm, paso_actual, next_action_date, next_action_text,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        id, nombre, tipo, get('email'), get('whatsapp'), get('empresa'), get('notas'),
+        get('marca_id'), get('canal'), 'nuevo_contacto', null,
+        get('next_action_date'), get('next_action_text'), ts, ts
+      )
+      .run();
+
+    // Seed los pasos del flujo según el tipo
+    const pasos = pasosParaTipo(tipo);
+    for (let i = 0; i < pasos.length; i++) {
+      await db
+        .prepare('INSERT INTO contacto_pasos (id, contacto_id, paso_idx, paso_texto, done) VALUES (?, ?, ?, ?, 0)')
+        .bind(newId(), id, i, pasos[i])
+        .run();
+    }
+
+    return Astro.redirect(`/contactos/${id}`);
+  }
+}
+
+const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<{ id: string; nombre: string }>()).results ?? [];
+---
+
+<Layout title="Nuevo contacto" pageTitle="Nuevo contacto">
+  <div class="page-head">
+    <h1>Nuevo contacto</h1>
+    <a href="/contactos" class="btn btn-sm">Volver</a>
+  </div>
+
+  <p class="text-muted" style="font-size:12px;margin-bottom:24px">
+    Al crear el contacto se inicializa automáticamente la checklist de pasos según el tipo (cliente, modelo, proveedor, aspirante).
+  </p>
+
+  {error && <p class="text-danger">{error}</p>}
+
+  <form method="POST" action="/contactos/nuevo">
+    <label class="label">Nombre *</label>
+    <input class="input" name="nombre" required />
+
+    <div class="row">
+      <div class="col">
+        <label class="label">Tipo *</label>
+        <select class="select" name="tipo" required>
+          <option value="cliente">Cliente</option>
+          <option value="modelo">Modelo</option>
+          <option value="proveedor">Proveedor</option>
+          <option value="aspirante">Aspirante</option>
+          <option value="colaborador">Colaborador</option>
+        </select>
+      </div>
+      <div class="col">
+        <label class="label">Marca asociada</label>
+        <select class="select" name="marca_id">
+          <option value="">— sin asignar —</option>
+          {marcas.map((m) => <option value={m.id}>{m.nombre}</option>)}
+        </select>
+      </div>
+      <div class="col">
+        <label class="label">Canal</label>
+        <select class="select" name="canal">
+          <option value="">— sin asignar —</option>
+          <option value="Instagram">Instagram</option>
+          <option value="WhatsApp">WhatsApp</option>
+          <option value="Correo">Correo</option>
+          <option value="Referido">Referido</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col">
+        <label class="label">Email</label>
+        <input class="input" type="email" name="email" />
+      </div>
+      <div class="col">
+        <label class="label">WhatsApp</label>
+        <input class="input" name="whatsapp" />
+      </div>
+      <div class="col">
+        <label class="label">Empresa</label>
+        <input class="input" name="empresa" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col">
+        <label class="label">Próxima acción — fecha</label>
+        <input class="input" type="date" name="next_action_date" />
+      </div>
+      <div class="col">
+        <label class="label">Próxima acción — descripción</label>
+        <input class="input" name="next_action_text" placeholder="Llamar para confirmar cotización" />
+      </div>
+    </div>
+
+    <label class="label">Notas</label>
+    <textarea class="textarea" name="notas"></textarea>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Crear contacto</button>
+      <a href="/contactos" class="btn">Cancelar</a>
+    </div>
+  </form>
+</Layout>

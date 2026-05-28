@@ -63,6 +63,19 @@ Plataforma admin unificada del Universo FC Agency. Reemplaza las 5 plataformas s
 5. Agregar el link al `src/components/Sidebar.astro`.
 6. Actualizar la bitácora abajo.
 
+## Equipo real (validado leyendo código de las 4 plataformas viejas)
+
+- **Vic** → opera `fc-agency-produ` (producciones). Path Firebase `producciones/`.
+- **Andrea M** → opera `fc-agency-brand-content` (briefs, contenido, KPIs). Path Firebase `andrea/`.
+- **Victoria** → opera `fc-agency-community` (CRM/tracker). Path Firebase `tracker/`. **OJO:** Vic y Victoria son personas distintas.
+- **Renata Ondarza** → opera `fc-agency-model-operation` (roster de modelos, castings). Path Firebase `models/`.
+- **Fely** → dueña, supervisión cross-marca.
+
+## Documentación adicional
+
+- `DESCUBRIMIENTOS.md` — análisis profundo de las 4 plataformas viejas, duplicaciones encontradas, decisiones pendientes para Fely.
+
 ## Bitácora
 
-- **2026-05-14** — Scaffolding inicial completo: stack Astro+CF+D1+auth, layout, sidebar, Modelos funcional, placeholders. Repo en `pradofox/admin-fcagency` (pendiente transfer a `FC-Agency`).
+- **2026-05-14** — Scaffolding inicial: stack Astro+CF+D1+auth, layout, sidebar, Modelos funcional, placeholders.
+- **2026-05-27** — Análisis de las 4 plataformas viejas. Schema extendido con 10 migraciones nuevas (0007-0016): proveedores+lineas_produccion, trabajos_modelo, campañas, KPIs, castings, contacto_pasos, acciones_calendario, extensiones a modelos/briefs/contactos. Secciones construidas: Producciones, Briefs+Contenido, Contactos+CRM, Castings. Script de migración Firebase→D1.

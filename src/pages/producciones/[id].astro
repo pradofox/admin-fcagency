@@ -1,0 +1,267 @@
+---
+import Layout from '../../components/Layout.astro';
+import ProduccionForm from '../../components/producciones/ProduccionForm.astro';
+import { requireUser } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
+
+requireUser(Astro);
+const db = getDB(Astro);
+const { id } = Astro.params;
+
+let error: string | null = null;
+let saved = false;
+
+interface Linea {
+  id: string;
+  rol: string;
+  nombre_libre: string | null;
+  proveedor_id: string | null;
+  modelo_id: string | null;
+  cobro_cliente: number;
+  comision_pct: number;
+  pago_proveedor: number;
+  estado: string;
+  notas: string | null;
+}
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const method = form.get('_method');
+  const action = form.get('_action');
+
+  if (method === 'DELETE') {
+    await db.prepare('DELETE FROM producciones WHERE id = ?').bind(id).run();
+    return Astro.redirect('/producciones');
+  }
+
+  if (action === 'add_linea') {
+    const lineaId = newId();
+    const ts = now();
+    const rol = (form.get('linea_rol') as string)?.trim() || 'Otro';
+    const nombre = (form.get('linea_nombre') as string)?.trim() || '';
+    const cobro = Number(form.get('linea_cobro')) || 0;
+    const comision = Number(form.get('linea_comision')) || 20;
+    await db
+      .prepare(
+        `INSERT INTO lineas_produccion (
+          id, produccion_id, rol, nombre_libre, cobro_cliente, comision_pct, estado, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'pendiente', ?)`
+      )
+      .bind(lineaId, id, rol, nombre || null, cobro, comision, ts)
+      .run();
+    return Astro.redirect(`/producciones/${id}`);
+  }
+
+  if (action === 'delete_linea') {
+    const lineaId = form.get('linea_id') as string;
+    if (lineaId) {
+      await db.prepare('DELETE FROM lineas_produccion WHERE id = ? AND produccion_id = ?').bind(lineaId, id).run();
+    }
+    return Astro.redirect(`/producciones/${id}`);
+  }
+
+  if (action === 'toggle_linea_pagada') {
+    const lineaId = form.get('linea_id') as string;
+    const nuevo = form.get('nuevo_estado') as string;
+    if (lineaId && (nuevo === 'pendiente' || nuevo === 'pagado' || nuevo === 'cancelado')) {
+      await db.prepare('UPDATE lineas_produccion SET estado = ? WHERE id = ? AND produccion_id = ?').bind(nuevo, lineaId, id).run();
+    }
+    return Astro.redirect(`/producciones/${id}`);
+  }
+
+  // Update producción
+  const titulo = (form.get('titulo') as string)?.trim();
+  if (!titulo) {
+    error = 'El título es obligatorio.';
+  } else {
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+    const getNum = (k: string) => {
+      const v = form.get(k);
+      if (v === null || v === '') return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    await db
+      .prepare(
+        `UPDATE producciones SET
+          titulo = ?, cliente_id = ?, marca_id = ?,
+          fecha_inicio = ?, fecha_fin = ?, hora_inicio = ?, hora_fin = ?,
+          ubicacion_mua = ?, ubicacion_shoot = ?, estado = ?,
+          presupuesto = ?, notas = ?, updated_at = ?
+        WHERE id = ?`
+      )
+      .bind(
+        titulo,
+        get('cliente_id'),
+        get('marca_id'),
+        get('fecha_inicio'),
+        get('fecha_fin'),
+        get('hora_inicio'),
+        get('hora_fin'),
+        get('ubicacion_mua'),
+        get('ubicacion_shoot'),
+        get('estado') ?? 'planeacion',
+        getNum('presupuesto'),
+        get('notas'),
+        now(),
+        id
+      )
+      .run();
+    saved = true;
+  }
+}
+
+const prod = await db.prepare('SELECT * FROM producciones WHERE id = ?').bind(id).first<any>();
+if (!prod) return Astro.redirect('/producciones');
+
+const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<{ id: string; nombre: string }>()).results ?? [];
+const clientes = (await db.prepare('SELECT id, nombre FROM clientes ORDER BY nombre').all<{ id: string; nombre: string }>()).results ?? [];
+
+const { results: lineas } = await db
+  .prepare(
+    `SELECT id, rol, nombre_libre, proveedor_id, modelo_id,
+            cobro_cliente, comision_pct, pago_proveedor, estado, notas
+     FROM lineas_produccion WHERE produccion_id = ? ORDER BY created_at`
+  )
+  .bind(id)
+  .all<Linea>();
+
+const totalCobro = (lineas ?? []).reduce((a, l) => a + (l.cobro_cliente || 0), 0);
+const totalPago = (lineas ?? []).reduce((a, l) => a + (l.pago_proveedor || 0), 0);
+const utilidad = totalCobro - totalPago;
+
+const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')} MXN`;
+
+const ROLES = [
+  'Fotografía', 'Video', 'Modelo', 'Maquillaje', 'Peinado', 'Styling',
+  'Pantallas', 'Audio', 'Iluminación', 'Operación', 'Montaje', 'Desmontaje', 'Traslado',
+  'Estudio', 'Day pass', 'Espacio de talleres', 'Otro'
+];
+---
+
+<Layout title={`Editar — ${prod.titulo}`} pageTitle={prod.titulo}>
+  <div class="page-head">
+    <h1>{prod.titulo}</h1>
+    <div style="display:flex;gap:10px">
+      <a href="/producciones" class="btn btn-sm">Volver</a>
+      <form method="POST" action={`/producciones/${id}`} onsubmit="return confirm('¿Eliminar esta producción y todas sus líneas?')" style="display:inline">
+        <input type="hidden" name="_method" value="DELETE" />
+        <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
+      </form>
+    </div>
+  </div>
+
+  {saved && <p class="text-ok" style="margin-bottom:20px">Guardado.</p>}
+  {error && <p class="text-danger" style="margin-bottom:20px">{error}</p>}
+
+  <div class="row" style="margin-bottom:32px">
+    <div class="col card">
+      <div class="card-meta">Cobro total</div>
+      <div class="card-title" style="color:var(--gold)">{fmt(totalCobro)}</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Pago a proveedores</div>
+      <div class="card-title">{fmt(totalPago)}</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Utilidad</div>
+      <div class="card-title" style="color:var(--ok)">{fmt(utilidad)}</div>
+    </div>
+  </div>
+
+  <h2 style="margin-top:32px">Líneas de producción</h2>
+  <p class="text-muted" style="font-size:12px;margin-bottom:16px">
+    Cada línea es un proveedor o modelo asignado. El pago al proveedor se calcula
+    automáticamente como cobro × (100 − comisión)/100.
+  </p>
+
+  {lineas && lineas.length > 0 ? (
+    <div style="overflow-x:auto;margin-bottom:24px">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border);text-align:left">
+            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Rol</th>
+            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Nombre</th>
+            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Cobro</th>
+            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Comisión</th>
+            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Pago</th>
+            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Estado</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {lineas.map((l) => (
+            <tr style="border-bottom:1px solid var(--border)">
+              <td style="padding:12px 10px">{l.rol}</td>
+              <td style="padding:12px 10px">{l.nombre_libre ?? '—'}</td>
+              <td style="padding:12px 10px;text-align:right">{fmt(l.cobro_cliente)}</td>
+              <td style="padding:12px 10px;text-align:right">{l.comision_pct}%</td>
+              <td style="padding:12px 10px;text-align:right;color:var(--gold)">{fmt(l.pago_proveedor)}</td>
+              <td style="padding:12px 10px">
+                <form method="POST" action={`/producciones/${id}`} style="display:inline">
+                  <input type="hidden" name="_action" value="toggle_linea_pagada" />
+                  <input type="hidden" name="linea_id" value={l.id} />
+                  <input type="hidden" name="nuevo_estado" value={l.estado === 'pagado' ? 'pendiente' : 'pagado'} />
+                  <button type="submit" class={`chip ${l.estado === 'pagado' ? 'chip-ok' : 'chip-warning'}`} style="border:0;cursor:pointer">
+                    {l.estado}
+                  </button>
+                </form>
+              </td>
+              <td style="padding:12px 10px">
+                <form method="POST" action={`/producciones/${id}`} onsubmit="return confirm('¿Eliminar esta línea?')" style="display:inline">
+                  <input type="hidden" name="_action" value="delete_linea" />
+                  <input type="hidden" name="linea_id" value={l.id} />
+                  <button type="submit" class="btn btn-sm btn-danger">×</button>
+                </form>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  ) : (
+    <p class="text-muted" style="margin-bottom:24px">Aún no hay líneas.</p>
+  )}
+
+  <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:32px">
+    <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Agregar línea</summary>
+    <form method="POST" action={`/producciones/${id}`} style="margin-top:16px">
+      <input type="hidden" name="_action" value="add_linea" />
+      <div class="row">
+        <div class="col">
+          <label class="label">Rol</label>
+          <select class="select" name="linea_rol" required>
+            {ROLES.map((r) => <option value={r}>{r}</option>)}
+          </select>
+        </div>
+        <div class="col">
+          <label class="label">Nombre</label>
+          <input class="input" name="linea_nombre" placeholder="Persona o proveedor" />
+        </div>
+        <div class="col">
+          <label class="label">Cobro al cliente (MXN)</label>
+          <input class="input" type="number" step="0.01" name="linea_cobro" required />
+        </div>
+        <div class="col">
+          <label class="label">Comisión %</label>
+          <input class="input" type="number" step="0.01" name="linea_comision" value="20" />
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary" style="margin-top:16px">Agregar</button>
+    </form>
+  </details>
+
+  <h2 style="margin-top:32px">Detalles de la producción</h2>
+  <ProduccionForm
+    produccion={prod}
+    marcas={marcas}
+    clientes={clientes}
+    action={`/producciones/${id}`}
+    submitLabel="Guardar cambios"
+    isEdit={true}
+  />
+</Layout>

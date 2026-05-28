@@ -1,0 +1,131 @@
+---
+interface Marca { id: string; nombre: string }
+interface Brief {
+  id?: string;
+  titulo?: string;
+  marca_id?: string | null;
+  pilar?: string | null;
+  formato?: string | null;
+  plataforma?: string | null;
+  descripcion?: string | null;
+  objetivo?: string | null;
+  audiencia?: string | null;
+  cta?: string | null;
+  copy?: string | null;
+  hashtags?: string | null;
+  musica?: string | null;
+  refs_visuales?: string | null;
+  creador_asignado?: string | null;
+  fecha_publicacion?: string | null;
+  deadline?: string | null;
+  estado?: string;
+}
+
+interface Props {
+  brief?: Brief;
+  marcas: Marca[];
+  action: string;
+  submitLabel: string;
+  isEdit?: boolean;
+}
+
+const { brief = {}, marcas, action, submitLabel, isEdit = false } = Astro.props;
+
+const PILARES = ['Inspiración', 'Educación', 'Comunidad', 'Posicionamiento', 'Conversión'];
+const FORMATOS = ['Post estático', 'Reel', 'Stories', 'Carrusel', 'Video', 'UGC', 'Behind the scenes', 'Encuesta'];
+const PLATAFORMAS = ['Instagram', 'TikTok', 'Pinterest', 'LinkedIn'];
+const ESTADOS = ['idea', 'aprobado', 'produccion', 'publicado', 'archivado'];
+---
+
+<form method="POST" action={action}>
+  {isEdit && <input type="hidden" name="_method" value="PATCH" />}
+
+  <label class="label">Título *</label>
+  <input class="input" name="titulo" value={brief.titulo ?? ''} required />
+
+  <div class="row">
+    <div class="col">
+      <label class="label">Marca</label>
+      <select class="select" name="marca_id">
+        <option value="">— sin asignar —</option>
+        {marcas.map((m) => (
+          <option value={m.id} selected={brief.marca_id === m.id}>{m.nombre}</option>
+        ))}
+      </select>
+    </div>
+    <div class="col">
+      <label class="label">Pilar de comunicación</label>
+      <select class="select" name="pilar">
+        <option value="">— sin asignar —</option>
+        {PILARES.map((p) => <option value={p} selected={brief.pilar === p}>{p}</option>)}
+      </select>
+    </div>
+    <div class="col">
+      <label class="label">Estado</label>
+      <select class="select" name="estado">
+        {ESTADOS.map((e) => <option value={e} selected={(brief.estado ?? 'idea') === e}>{e}</option>)}
+      </select>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="col">
+      <label class="label">Formato</label>
+      <select class="select" name="formato">
+        <option value="">— sin asignar —</option>
+        {FORMATOS.map((f) => <option value={f} selected={brief.formato === f}>{f}</option>)}
+      </select>
+    </div>
+    <div class="col">
+      <label class="label">Plataforma</label>
+      <select class="select" name="plataforma">
+        <option value="">— sin asignar —</option>
+        {PLATAFORMAS.map((p) => <option value={p} selected={brief.plataforma === p}>{p}</option>)}
+      </select>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="col">
+      <label class="label">Fecha publicación</label>
+      <input class="input" name="fecha_publicacion" type="date" value={brief.fecha_publicacion ?? ''} />
+    </div>
+    <div class="col">
+      <label class="label">Deadline creador</label>
+      <input class="input" name="deadline" type="date" value={brief.deadline ?? ''} />
+    </div>
+    <div class="col">
+      <label class="label">Creador asignado</label>
+      <input class="input" name="creador_asignado" value={brief.creador_asignado ?? ''} />
+    </div>
+  </div>
+
+  <label class="label">Descripción</label>
+  <textarea class="textarea" name="descripcion">{brief.descripcion ?? ''}</textarea>
+
+  <label class="label">Objetivo</label>
+  <textarea class="textarea" name="objetivo">{brief.objetivo ?? ''}</textarea>
+
+  <label class="label">Audiencia</label>
+  <textarea class="textarea" name="audiencia">{brief.audiencia ?? ''}</textarea>
+
+  <label class="label">Call to action (CTA)</label>
+  <input class="input" name="cta" value={brief.cta ?? ''} />
+
+  <label class="label">Copy / caption</label>
+  <textarea class="textarea" name="copy">{brief.copy ?? ''}</textarea>
+
+  <label class="label">Hashtags</label>
+  <input class="input" name="hashtags" value={brief.hashtags ?? ''} placeholder="#fcagency #moda" />
+
+  <label class="label">Música</label>
+  <input class="input" name="musica" value={brief.musica ?? ''} />
+
+  <label class="label">Referencias visuales (links a Drive, Pinterest, etc.)</label>
+  <textarea class="textarea" name="refs_visuales">{brief.refs_visuales ?? ''}</textarea>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{submitLabel}</button>
+    <a href="/briefs" class="btn">Cancelar</a>
+  </div>
+</form>

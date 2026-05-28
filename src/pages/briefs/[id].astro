@@ -1,0 +1,100 @@
+---
+import Layout from '../../components/Layout.astro';
+import BriefForm from '../../components/briefs/BriefForm.astro';
+import { requireUser } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+
+requireUser(Astro);
+const db = getDB(Astro);
+const { id } = Astro.params;
+
+let error: string | null = null;
+let saved = false;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const method = form.get('_method');
+
+  if (method === 'DELETE') {
+    await db.prepare('DELETE FROM briefs WHERE id = ?').bind(id).run();
+    return Astro.redirect('/briefs');
+  }
+
+  const titulo = (form.get('titulo') as string)?.trim();
+  if (!titulo) {
+    error = 'El título es obligatorio.';
+  } else {
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+    await db
+      .prepare(
+        `UPDATE briefs SET
+          titulo = ?, marca_id = ?, pilar = ?, descripcion = ?, objetivo = ?,
+          audiencia = ?, cta = ?, copy = ?, hashtags = ?, musica = ?,
+          refs_visuales = ?, creador_asignado = ?, deadline = ?,
+          formato = ?, fecha_publicacion = ?, plataforma = ?, estado = ?,
+          updated_at = ?
+        WHERE id = ?`
+      )
+      .bind(
+        titulo, get('marca_id'), get('pilar'), get('descripcion'), get('objetivo'),
+        get('audiencia'), get('cta'), get('copy'), get('hashtags'), get('musica'),
+        get('refs_visuales'), get('creador_asignado'), get('deadline'),
+        get('formato'), get('fecha_publicacion'), get('plataforma'),
+        get('estado') ?? 'idea', now(), id
+      )
+      .run();
+    saved = true;
+  }
+}
+
+const brief = await db.prepare('SELECT * FROM briefs WHERE id = ?').bind(id).first<any>();
+if (!brief) return Astro.redirect('/briefs');
+
+const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<{ id: string; nombre: string }>()).results ?? [];
+
+const { results: piezas } = await db
+  .prepare('SELECT id, titulo, formato, plataforma, fecha_programada, estado FROM piezas_contenido WHERE brief_id = ? ORDER BY fecha_programada')
+  .bind(id)
+  .all<any>();
+---
+
+<Layout title={`Brief — ${brief.titulo}`} pageTitle={brief.titulo}>
+  <div class="page-head">
+    <h1>{brief.titulo}</h1>
+    <div style="display:flex;gap:10px">
+      <a href="/briefs" class="btn btn-sm">Volver</a>
+      <form method="POST" action={`/briefs/${id}`} onsubmit="return confirm('¿Eliminar brief y sus piezas?')" style="display:inline">
+        <input type="hidden" name="_method" value="DELETE" />
+        <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
+      </form>
+    </div>
+  </div>
+
+  {saved && <p class="text-ok" style="margin-bottom:20px">Guardado.</p>}
+  {error && <p class="text-danger" style="margin-bottom:20px">{error}</p>}
+
+  {piezas && piezas.length > 0 && (
+    <>
+      <h2 style="margin-top:8px">Piezas en calendario</h2>
+      <div class="grid" style="margin-bottom:32px">
+        {piezas.map((p: any) => (
+          <article class="card">
+            <div class="card-title" style="font-size:14px">{p.titulo}</div>
+            <div class="card-meta">
+              <span class="chip">{p.estado}</span>
+              {p.formato && <span>{p.formato}</span>}
+              {p.plataforma && <span>{p.plataforma}</span>}
+              {p.fecha_programada && <span class="text-muted">{p.fecha_programada}</span>}
+            </div>
+          </article>
+        ))}
+      </div>
+    </>
+  )}
+
+  <h2 style="margin-top:8px">Datos del brief</h2>
+  <BriefForm brief={brief} marcas={marcas} action={`/briefs/${id}`} submitLabel="Guardar cambios" isEdit={true} />
+</Layout>
