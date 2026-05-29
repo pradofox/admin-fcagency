@@ -27,6 +27,20 @@ const filtrosActivos: Set<Tipo> = filtroParam
   : new Set(TIPOS);
 const soloMias = params.get('mias') === '1';
 
+// Filtro por modelo: el "calendario por perfil de modelo" es este mismo calendario
+// restringido a las producciones donde aparece ese modelo.
+const modeloFiltro = params.get('modelo');
+let modeloProdIds: Set<string> | null = null;
+let modeloNombre: string | null = null;
+if (modeloFiltro) {
+  const { results: mp } = await db
+    .prepare('SELECT DISTINCT produccion_id FROM lineas_produccion WHERE modelo_id = ?')
+    .bind(modeloFiltro).all<any>();
+  modeloProdIds = new Set((mp ?? []).map((r: any) => r.produccion_id));
+  const mrow = await db.prepare('SELECT nombre FROM modelos WHERE id = ?').bind(modeloFiltro).first<any>();
+  modeloNombre = mrow?.nombre ?? null;
+}
+
 // Mes a mostrar
 const today     = new Date();
 const todayStr  = today.toISOString().slice(0, 10);
@@ -166,6 +180,14 @@ if (filtrosActivos.has('Estudio')) {
   })));
 }
 
+// ── Filtro por modelo: solo eventos de producción de ese modelo ──────────────
+if (modeloFiltro && modeloProdIds) {
+  const PROD_TIPOS = ['Producción', 'Fitting', 'Booking', 'Campaña'];
+  events = events.filter((e) =>
+    PROD_TIPOS.includes(e.tipo) && modeloProdIds!.has(e.href.split('/').pop() as string)
+  );
+}
+
 // ── Agrupar por fecha ──────────────────────────────────────────────────────────
 const byDate: Record<string, Event[]> = {};
 for (const e of events) {
@@ -186,6 +208,7 @@ function buildHref(overrides: Record<string, string | undefined>) {
   if (mesActual !== mesDefault) p.set('mes', mesActual);
   if (filtroParam) p.set('show', filtroParam);
   if (soloMias) p.set('mias', '1');
+  if (modeloFiltro) p.set('modelo', modeloFiltro);
   for (const k in overrides) {
     const v = overrides[k];
     if (v === undefined || v === '') p.delete(k); else p.set(k, v);
@@ -242,6 +265,19 @@ const diasSemana = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
       <a href={buildHref({ mes: nextMonth })} class="btn btn-sm">→</a>
     </div>
   </div>
+
+  {modeloFiltro && (
+    <div class="card" style="margin-bottom:16px;border-left:3px solid var(--gold);display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <span class="text-muted" style="font-size:11px;letter-spacing:.1em;text-transform:uppercase">Agenda de modelo</span>
+        <div style="color:var(--gold);font-weight:600;font-size:15px">{modeloNombre ?? 'Modelo'}</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <a href={`/modelos/${modeloFiltro}`} class="btn btn-sm">Ver perfil</a>
+        <a href="/calendario" class="btn btn-sm">✕ Quitar filtro</a>
+      </div>
+    </div>
+  )}
 
   <div class="filters" style="margin-bottom:8px">
     {TIPOS.map((t) => (

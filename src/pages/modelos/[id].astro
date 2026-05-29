@@ -3,6 +3,7 @@ import Layout from '../../components/Layout.astro';
 import ModeloForm from '../../components/modelos/ModeloForm.astro';
 import { requireUser, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
+import { formatFecha } from '../../lib/fechas';
 
 const user = requireUser(Astro);
 const editable = canEdit(user);
@@ -111,6 +112,34 @@ const { results: castingsProp } = await db
   )
   .bind(id, id, id)
   .all<any>();
+
+// Próximas producciones (agenda) del modelo
+const { results: proximas } = await db
+  .prepare(
+    `SELECT lp.rol, p.id as prod_id, p.titulo, p.fecha_inicio, p.estado, p.tipo_produccion,
+            cl.nombre as cliente, p.cliente_id
+     FROM lineas_produccion lp
+     JOIN producciones p   ON p.id = lp.produccion_id
+     LEFT JOIN clientes cl ON cl.id = p.cliente_id
+     WHERE lp.modelo_id = ? AND lp.estado != 'cancelado'
+       AND p.estado != 'cancelada' AND p.fecha_inicio >= date('now')
+     ORDER BY p.fecha_inicio ASC`
+  )
+  .bind(id)
+  .all<any>();
+
+// Token para el feed .ics suscribible (Google/Apple Calendar). Se genera si falta.
+let icsToken = (modelo as any).ics_token as string | null;
+if (!icsToken) {
+  icsToken = crypto.randomUUID().replace(/-/g, '');
+  await db.prepare('UPDATE modelos SET ics_token = ? WHERE id = ?').bind(icsToken, id).run();
+}
+const icsUrl = `${Astro.url.origin}/api/ics/modelo/${icsToken}.ics`;
+
+const colorEstado: Record<string, string> = {
+  planeacion: '#e9b949', confirmada: 'var(--text-ok,#4ade80)', en_curso: '#6ab7ff',
+  completada: 'var(--text-muted,#888)', cancelada: 'var(--danger,#e25555)'
+};
 ---
 
 <Layout title={`Editar — ${modelo.nombre}`} pageTitle={modelo.nombre as string}>
@@ -129,6 +158,50 @@ const { results: castingsProp } = await db
 
   {saved && <p class="text-ok" style="margin-bottom:20px">Guardado.</p>}
   {error && <p class="text-danger" style="margin-bottom:20px">{error}</p>}
+
+  {/* ── Agenda / próximas producciones ── */}
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <h2 style="margin:0">Próximas producciones <small class="text-muted" style="font-size:12px;letter-spacing:0;text-transform:none">{proximas?.length ?? 0}</small></h2>
+    <div style="display:flex;gap:8px">
+      <a href={`/calendario?modelo=${id}`} class="btn btn-sm">Ver en calendario</a>
+      <button type="button" class="btn btn-sm" id="btn_copy_ics">Copiar enlace Google Calendar</button>
+    </div>
+  </div>
+
+  {proximas && proximas.length > 0 ? (
+    <div class="table-card" style="margin-bottom:14px">
+      <table>
+        <thead>
+          <tr><th>Fecha</th><th>Producción</th><th>Cliente</th><th>Tipo</th><th>Rol</th><th>Estado</th></tr>
+        </thead>
+        <tbody>
+          {(proximas as any[]).map((it) => (
+            <tr>
+              <td class="mono text-muted" style="white-space:nowrap">{formatFecha(it.fecha_inicio)}</td>
+              <td><a href={`/producciones/${it.prod_id}`} style="color:inherit;font-weight:500">{it.titulo}</a></td>
+              <td>{it.cliente_id ? <a href={`/clientes/${it.cliente_id}`} style="color:inherit">{it.cliente}</a> : <span class="text-muted">{it.cliente ?? '—'}</span>}</td>
+              <td>{it.tipo_produccion ? <span class="chip" style="font-size:10px">{it.tipo_produccion}</span> : <span class="text-muted">—</span>}</td>
+              <td><span class="text-muted" style="font-size:12px">{it.rol ?? '—'}</span></td>
+              <td><span class="chip" style={`font-size:10px;color:${colorEstado[it.estado] ?? ''}`}>{it.estado}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  ) : (
+    <p class="text-muted" style="margin-bottom:14px">Sin producciones próximas agendadas.</p>
+  )}
+
+  <details style="margin-bottom:32px">
+    <summary class="text-muted" style="cursor:pointer;font-size:11px;letter-spacing:.15em;text-transform:uppercase">Sincronizar con Google Calendar</summary>
+    <div style="background:var(--bg-2);border:1px solid var(--border);padding:14px;margin-top:8px;border-radius:4px">
+      <p class="text-muted" style="font-size:12px;margin-bottom:8px">
+        Suscribe este enlace en Google Calendar (Otros calendarios → Desde URL) o Apple Calendar.
+        Las producciones de {modelo.nombre} aparecerán y se actualizarán solas.
+      </p>
+      <input class="input mono" id="ics_url" readonly value={icsUrl} style="font-size:11px" onclick="this.select()" />
+    </div>
+  </details>
 
   {trabajos && trabajos.length > 0 && (
     <>
@@ -207,3 +280,19 @@ const { results: castingsProp } = await db
     <p class="text-muted" style="font-size:12px;margin-top:24px">Solo lectura. Necesitas rol editor o admin para modificar.</p>
   )}
 </Layout>
+
+<script>
+  document.getElementById('btn_copy_ics')?.addEventListener('click', async () => {
+    const inp = document.getElementById('ics_url') as HTMLInputElement | null;
+    const btn = document.getElementById('btn_copy_ics');
+    if (!inp || !btn) return;
+    try {
+      await navigator.clipboard.writeText(inp.value);
+      const prev = btn.textContent;
+      btn.textContent = '✓ Copiado';
+      setTimeout(() => { btn.textContent = prev; }, 1800);
+    } catch {
+      inp.select();
+    }
+  });
+</script>
