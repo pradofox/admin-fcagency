@@ -195,7 +195,7 @@ const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
   )}
 </Layout>
 
-<script>
+<script is:inline>
 // Roles que se cobran por hora → muestran el campo de hora adicional
 const ROLES_POR_HORA = ['Modelo'];
 function toggleHoraAd() {

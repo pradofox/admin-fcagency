@@ -43,26 +43,41 @@ if (Astro.request.method === 'POST' && editable) {
     if (!concepto) {
       error = 'Concepto no encontrado.';
     } else {
-      const { results: reps } = await db
-        .prepare('SELECT proveedor_nombre, rol, monto_mxn FROM repartos_concepto WHERE concepto_id = ?')
-        .bind(conceptoId).all<any>();
-      let repartos = (reps ?? []).filter((r: any) => r.proveedor_nombre);
-
-      // Tarifa por horas: 1ª hora = precio_mxn, cada hora extra suma precio_hora_adicional.
-      // El reparto a proveedores (pago al modelo) escala proporcional al cobro.
       const precioBase = concepto.precio_mxn ?? 0;
       const horaAd = concepto.precio_hora_adicional ?? null;
-      const horasRaw = form.get('horas');
-      const horas = horasRaw === null || horasRaw === '' ? 1 : Math.max(1, Number(horasRaw) || 1);
+      const porHora = horaAd != null && horaAd > 0;
+
+      let repartos: any[] = [];
+      let pagoProv = 0;
       let cobroLinea = precioBase;
       let descripcion = concepto.nombre;
-      if (horaAd != null && horaAd > 0 && horas > 1) {
-        cobroLinea = precioBase + (horas - 1) * horaAd;
-        const factor = precioBase > 0 ? cobroLinea / precioBase : 1;
-        repartos = repartos.map((r: any) => ({ ...r, monto_mxn: Math.round((r.monto_mxn ?? 0) * factor) }));
-        descripcion = `${concepto.nombre} (${horas} hrs)`;
+      let provNombre: string | null = null;
+
+      if (porHora) {
+        // Concepto por hora (modelo): el modelo se elige por cotización, no es fijo
+        // del catálogo. Una línea por modelo: 1ª hora = precio_mxn, extras suman horaAd.
+        // El pago al modelo se deja al default (editable por línea) porque cambia por producción.
+        const horasRaw = form.get('horas');
+        const horas = horasRaw === null || horasRaw === '' ? 1 : Math.max(1, Number(horasRaw) || 1);
+        const modeloNombre = (form.get('modelo_nombre') as string)?.trim() || null;
+        cobroLinea = horas > 1 ? precioBase + (horas - 1) * horaAd! : precioBase;
+        provNombre = modeloNombre;
+        const horasTxt = `${horas % 1 === 0 ? horas : horas.toFixed(1)} hr${horas === 1 ? '' : 's'}`;
+        descripcion = modeloNombre
+          ? `${concepto.nombre} · ${modeloNombre} (${horasTxt})`
+          : `${concepto.nombre} (${horasTxt})`;
+        // pago_proveedor null → se calcula 80% por defecto y se puede editar la línea
+        pagoProv = null as any;
+      } else {
+        // Concepto normal con reparto fijo a proveedores
+        const { results: reps } = await db
+          .prepare('SELECT proveedor_nombre, rol, monto_mxn FROM repartos_concepto WHERE concepto_id = ?')
+          .bind(conceptoId).all<any>();
+        repartos = (reps ?? []).filter((r: any) => r.proveedor_nombre);
+        pagoProv = repartos.reduce((s: number, r: any) => s + (r.monto_mxn ?? 0), 0);
+        provNombre = repartos.map((r: any) => r.proveedor_nombre).join(', ') || null;
       }
-      const pagoProv = repartos.reduce((s: number, r: any) => s + (r.monto_mxn ?? 0), 0);
+
       const maxOrden = await db
         .prepare('SELECT MAX(orden) as m FROM lineas_cotizacion WHERE cotizacion_id = ?')
         .bind(id).first<any>();
@@ -73,8 +88,7 @@ if (Astro.request.method === 'POST' && editable) {
                   VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(
           newId(), id, descripcion, cobroLinea, concepto.rol ?? null,
-          repartos.map((r: any) => r.proveedor_nombre).join(', ') || null,
-          conceptoId, pagoProv, JSON.stringify(repartos), orden
+          provNombre, conceptoId, pagoProv, JSON.stringify(repartos), orden
         )
         .run();
       await db.prepare('UPDATE cotizaciones SET updated_at = ? WHERE id = ?').bind(now(), id).run();
@@ -451,12 +465,19 @@ const ESTADOS_FLUJO = [
               ))}
             </select>
           </div>
+          <div id="col_modelo_nombre" style="display:none;min-width:180px">
+            <label class="label">Modelo (nombre)</label>
+            <input class="input" type="text" name="modelo_nombre" id="inp_modelo_nombre" placeholder="Ej. Ana López" />
+          </div>
           <div id="col_horas" style="display:none;min-width:90px">
             <label class="label">Horas</label>
             <input class="input" type="number" name="horas" id="inp_horas_cat" min="1" step="0.5" value="1" onchange="onProvChange()" oninput="onProvChange()" style="width:90px" />
           </div>
           <button type="submit" class="btn btn-primary">Agregar a la cotización</button>
         </form>
+        <p id="hint_modelo" class="text-muted" style="display:none;font-size:11px;margin:8px 0 0">
+          Agrega una línea por modelo. El pago a cada modelo lo defines en la línea (cambia por producción).
+        </p>
 
         {/* Preview del reparto del concepto seleccionado */}
         <div id="preview_concepto" style="display:none;margin-top:12px;padding:10px;background:var(--bg-3,#1a1a1a);border:1px solid var(--border);border-radius:4px">
@@ -584,44 +605,57 @@ function onProvChange() {
   const box = document.getElementById('preview_concepto');
   const cont = document.getElementById('preview_repartos');
   const colHoras = document.getElementById('col_horas');
+  const colModelo = document.getElementById('col_modelo_nombre');
+  const hintModelo = document.getElementById('hint_modelo');
   if (!concepto || !box || !cont) {
     if (box) box.style.display = 'none';
     if (colHoras) colHoras.style.display = 'none';
+    if (colModelo) colModelo.style.display = 'none';
+    if (hintModelo) hintModelo.style.display = 'none';
     return;
   }
 
-  // ¿Concepto por horas? Mostrar campo de horas y escalar.
+  // ¿Concepto por horas (modelo)? Mostrar campo de horas + nombre del modelo.
   const horaAd = concepto.precio_hora_adicional;
   const porHora = horaAd != null && horaAd > 0;
   if (colHoras) colHoras.style.display = porHora ? 'block' : 'none';
-  let horas = 1;
-  if (porHora) {
-    horas = parseFloat(document.getElementById('inp_horas_cat')?.value || '1') || 1;
-    if (horas < 1) horas = 1;
-  }
-  const precioBase = concepto.precio_mxn || 0;
-  const cobro = porHora && horas > 1 ? precioBase + (horas - 1) * horaAd : precioBase;
-  const factor = precioBase > 0 ? cobro / precioBase : 1;
+  if (colModelo) colModelo.style.display = porHora ? 'block' : 'none';
+  if (hintModelo) hintModelo.style.display = porHora ? 'block' : 'none';
 
+  const precioBase = concepto.precio_mxn || 0;
+
+  if (porHora) {
+    let horas = parseFloat(document.getElementById('inp_horas_cat')?.value || '1') || 1;
+    if (horas < 1) horas = 1;
+    const cobro = horas > 1 ? precioBase + (horas - 1) * horaAd : precioBase;
+    let html = horas > 1
+      ? `<div style="color:#888;font-size:11px;margin-bottom:6px">${horas} hrs: 1ª hora ${fmtMX(precioBase)} + ${horas - 1} × ${fmtMX(horaAd)} (hora extra)</div>`
+      : `<div style="color:#888;font-size:11px;margin-bottom:6px">1 hora</div>`;
+    html += `<div style="display:flex;justify-content:space-between;padding:2px 0;font-weight:600">
+        <span>Cobro al cliente por este modelo</span>
+        <span class="mono" style="color:var(--gold)">${fmtMX(cobro)}</span></div>`;
+    html += `<div style="color:#888;font-size:11px;margin-top:4px">El pago a este modelo lo defines en la línea (Editar).</div>`;
+    cont.innerHTML = html;
+    box.style.display = 'block';
+    return;
+  }
+
+  // Concepto normal con reparto fijo a proveedores
   const repartos = concepto.repartos ?? [];
   let sumRep = 0;
   let html = '';
   for (const r of repartos) {
-    const monto = Math.round((r.monto_mxn || 0) * factor);
-    sumRep += monto;
+    sumRep += (r.monto_mxn || 0);
     html += `<div style="display:flex;justify-content:space-between;padding:2px 0">
       <span>· ${r.proveedor_nombre}${r.rol ? ` <span style="color:#888">(${r.rol})</span>` : ''}</span>
-      <span class="mono" style="color:var(--danger,#e25555)">${fmtMX(monto)}</span></div>`;
-  }
-  if (porHora && horas > 1) {
-    html = `<div style="color:#888;font-size:11px;margin-bottom:6px">${horas} hrs: 1ª hora ${fmtMX(precioBase)} + ${horas - 1} × ${fmtMX(horaAd)}</div>` + html;
+      <span class="mono" style="color:var(--danger,#e25555)">${fmtMX(r.monto_mxn)}</span></div>`;
   }
   html += `<div style="display:flex;justify-content:space-between;padding:6px 0 2px;margin-top:4px;border-top:1px solid var(--border)">
       <span style="color:var(--gold)">Utilidad FC Agency</span>
-      <span class="mono" style="color:var(--text-ok,#4ade80)">${fmtMX(cobro - sumRep)}</span></div>`;
+      <span class="mono" style="color:var(--text-ok,#4ade80)">${fmtMX(precioBase - sumRep)}</span></div>`;
   html += `<div style="display:flex;justify-content:space-between;padding:2px 0;font-weight:600">
       <span>Cobro al cliente</span>
-      <span class="mono" style="color:var(--gold)">${fmtMX(cobro)}</span></div>`;
+      <span class="mono" style="color:var(--gold)">${fmtMX(precioBase)}</span></div>`;
   cont.innerHTML = html;
   box.style.display = 'block';
 }
