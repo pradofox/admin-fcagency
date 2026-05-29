@@ -43,6 +43,7 @@ const totalAspirantes = await db.prepare("SELECT COUNT(*) as c FROM modelos WHER
     <h1>Modelos <small class="text-muted" style="font-size:13px;letter-spacing:0;font-family:var(--font-body);text-transform:none">{totalActivos?.c ?? 0} activas · {totalAspirantes?.c ?? 0} aspirantes</small></h1>
     <div style="display:flex;gap:10px">
       <a href="/modelos/agenda" class="btn btn-sm">Agenda</a>
+      <a href="/modelos/material" class="btn btn-sm">Material</a>
       <a href="/api/modelos/export" class="btn btn-sm">Exportar CSV</a>
       {canEdit(user) && <a href="/modelos/nuevo" class="btn btn-primary">+ Nueva</a>}
     </div>

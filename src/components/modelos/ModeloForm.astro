@@ -18,6 +18,12 @@ interface Modelo {
   talentos?: string | null;
   notas?: string | null;
   estado?: string;
+  polas?: number | null;
+  book?: number | null;
+  videocasting?: number | null;
+  drive_folder?: string | null;
+  material_actualizado_en?: string | null;
+  material_notas?: string | null;
 }
 
 interface Props {
@@ -107,6 +113,31 @@ const isEdit = method === 'PATCH';
 
   <label class="label">Talentos</label>
   <textarea class="textarea" name="talentos" placeholder="Actuación, baile, deportes, idiomas, habilidades especiales...">{modelo.talentos ?? ''}</textarea>
+
+  <label class="label" style="margin-top:28px">Material / book</label>
+  <div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:12px">
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+      <input type="checkbox" name="polas" value="1" checked={!!modelo.polas} /> Polas
+    </label>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+      <input type="checkbox" name="book" value="1" checked={!!modelo.book} /> Book
+    </label>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+      <input type="checkbox" name="videocasting" value="1" checked={!!modelo.videocasting} /> Videocasting
+    </label>
+  </div>
+  <div class="row">
+    <div class="col" style="flex:2">
+      <label class="label">Carpeta de material (Drive)</label>
+      <input class="input" name="drive_folder" value={modelo.drive_folder ?? ''} placeholder="https://drive.google.com/..." />
+    </div>
+    <div class="col">
+      <label class="label">Última actualización de material</label>
+      <input class="input" type="date" name="material_actualizado_en" value={modelo.material_actualizado_en ?? ''} />
+    </div>
+  </div>
+  <label class="label">Material pendiente / notas</label>
+  <textarea class="textarea" name="material_notas" placeholder="Qué falta subir o actualizar en el book">{modelo.material_notas ?? ''}</textarea>
 
   <label class="label">Estado</label>
   <select class="select" name="estado">

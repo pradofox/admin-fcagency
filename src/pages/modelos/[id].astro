@@ -35,12 +35,15 @@ if (Astro.request.method === 'POST' && editable) {
       const n = Number(v);
       return Number.isFinite(n) ? n : null;
     };
+    const chk = (k: string) => (form.get(k) === '1' ? 1 : 0);
     await db
       .prepare(
         `UPDATE modelos SET
           nombre = ?, email = ?, whatsapp = ?, instagram = ?, cumpleanos = ?, genero = ?,
           estatura_cm = ?, busto_cm = ?, cintura_cm = ?, cadera_cm = ?, calzado_mx = ?,
-          cabello = ?, ojos = ?, ciudad = ?, talentos = ?, notas = ?, estado = ?, updated_at = ?
+          cabello = ?, ojos = ?, ciudad = ?, talentos = ?, notas = ?, estado = ?,
+          polas = ?, book = ?, videocasting = ?, drive_folder = ?,
+          material_actualizado_en = ?, material_notas = ?, updated_at = ?
         WHERE id = ?`
       )
       .bind(
@@ -61,6 +64,12 @@ if (Astro.request.method === 'POST' && editable) {
         get('talentos'),
         get('notas'),
         get('estado') ?? 'activo',
+        chk('polas'),
+        chk('book'),
+        chk('videocasting'),
+        get('drive_folder'),
+        get('material_actualizado_en'),
+        get('material_notas'),
         now(),
         id
       )

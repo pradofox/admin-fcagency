@@ -20,6 +20,7 @@ interface Produccion {
   material_pendiente?: string | null;
   equipo_involucrado?: string | null;
   links_referencias?: string | null;
+  archivos_referencias?: string | null;
   tipo_produccion?: string | null;
 }
 
@@ -139,6 +140,9 @@ const TIPOS_PRODUCCION = [
 
   <label class="label">Links / referencias</label>
   <textarea class="textarea" name="links_referencias" placeholder="Drive, Pinterest, briefs, etc. Uno por línea.">{produccion.links_referencias ?? ''}</textarea>
+
+  <label class="label">Archivos / entregables</label>
+  <textarea class="textarea" name="archivos_referencias" placeholder="Links a material final, carpetas de entrega, selects. Uno por línea.">{produccion.archivos_referencias ?? ''}</textarea>
 
   <label class="label">Notas</label>
   <textarea class="textarea" name="notas">{produccion.notas ?? ''}</textarea>

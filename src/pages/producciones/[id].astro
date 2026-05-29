@@ -68,16 +68,22 @@ if (Astro.request.method === 'POST' && editable) {
     const lineaId = newId();
     const ts = now();
     const rol = (form.get('linea_rol') as string)?.trim() || 'Otro';
-    const nombre = (form.get('linea_nombre') as string)?.trim() || '';
+    let nombre = (form.get('linea_nombre') as string)?.trim() || '';
     const cobro = Number(form.get('linea_cobro')) || 0;
     const comision = Number(form.get('linea_comision')) || 20;
+    const modeloId = (form.get('linea_modelo_id') as string)?.trim() || null;
+    // Si se eligió un modelo registrado y no se escribió nombre, usar el del modelo
+    if (modeloId && !nombre) {
+      const mm = await db.prepare('SELECT nombre FROM modelos WHERE id = ?').bind(modeloId).first<any>();
+      nombre = mm?.nombre ?? '';
+    }
     await db
       .prepare(
         `INSERT INTO lineas_produccion (
-          id, produccion_id, rol, nombre_libre, cobro_cliente, comision_pct, estado, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'pendiente', ?)`
+          id, produccion_id, rol, nombre_libre, modelo_id, cobro_cliente, comision_pct, estado, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pendiente', ?)`
       )
-      .bind(lineaId, id, rol, nombre || null, cobro, comision, ts)
+      .bind(lineaId, id, rol, nombre || null, modeloId, cobro, comision, ts)
       .run();
     return Astro.redirect(`/producciones/${id}`);
   }
@@ -132,7 +138,7 @@ if (Astro.request.method === 'POST' && editable) {
           ubicacion_mua = ?, ubicacion_shoot = ?, estado = ?,
           presupuesto = ?, notas = ?,
           proximo_paso = ?, fecha_proxima_accion = ?, material_pendiente = ?,
-          equipo_involucrado = ?, links_referencias = ?,
+          equipo_involucrado = ?, links_referencias = ?, archivos_referencias = ?,
           updated_at = ?
         WHERE id = ?`
       )
@@ -155,6 +161,7 @@ if (Astro.request.method === 'POST' && editable) {
         get('material_pendiente'),
         get('equipo_involucrado'),
         get('links_referencias'),
+        get('archivos_referencias'),
         now(),
         id
       )
@@ -190,6 +197,27 @@ const { results: tareasProd } = await db
   )
   .bind(id)
   .all<any>();
+
+// Modelos registrados (para el selector al agregar línea de modelo)
+const { results: modelosActivos } = await db
+  .prepare(`SELECT id, nombre FROM modelos WHERE estado != 'archivado' ORDER BY nombre`)
+  .all<any>();
+
+// Modelos asignados a esta producción (líneas con modelo_id)
+const { results: modelosAsignados } = await db
+  .prepare(
+    `SELECT DISTINCT m.id, m.nombre, lp.rol
+     FROM lineas_produccion lp
+     JOIN modelos m ON m.id = lp.modelo_id
+     WHERE lp.produccion_id = ? AND lp.estado != 'cancelado'
+     ORDER BY m.nombre`
+  )
+  .bind(id)
+  .all<any>();
+
+// Nombres resueltos para la ficha
+const clienteNombre = prod.cliente_id ? (clientes.find((c: any) => c.id === prod.cliente_id)?.nombre ?? null) : null;
+const marcaNombre   = prod.marca_id ? (marcas.find((m: any) => m.id === prod.marca_id)?.nombre ?? null) : null;
 
 const totalCobro = (lineas ?? []).reduce((a, l) => a + (l.cobro_cliente || 0), 0);
 const totalPago = (lineas ?? []).reduce((a, l) => a + (l.pago_proveedor || 0), 0);
@@ -235,6 +263,96 @@ const ROLES = [
       <div class="stat-label">Utilidad</div>
     </div>
   </div>
+
+  {/* ── Ficha: resumen organizado ── */}
+  <div class="card" style="margin-bottom:24px">
+    <div class="ficha">
+      <div class="ficha-item">
+        <div class="ficha-label">Cliente</div>
+        <div class="ficha-val">{prod.cliente_id ? <a href={`/clientes/${prod.cliente_id}`} style="color:inherit">{clienteNombre}</a> : <span class="text-muted">—</span>}</div>
+      </div>
+      <div class="ficha-item">
+        <div class="ficha-label">Marca</div>
+        <div class="ficha-val">{marcaNombre ?? <span class="text-muted">—</span>}</div>
+      </div>
+      <div class="ficha-item">
+        <div class="ficha-label">Tipo</div>
+        <div class="ficha-val">{prod.tipo_produccion ? <span class="chip">{prod.tipo_produccion}</span> : <span class="text-muted">—</span>}</div>
+      </div>
+      <div class="ficha-item">
+        <div class="ficha-label">Estatus / cierre</div>
+        <div class="ficha-val"><span class="chip">{(prod.estado ?? 'planeacion').replace(/_/g, ' ')}</span></div>
+      </div>
+      <div class="ficha-item">
+        <div class="ficha-label">Fecha</div>
+        <div class="ficha-val mono">{prod.fecha_inicio ? formatFecha(prod.fecha_inicio) : '—'}{prod.fecha_fin && prod.fecha_fin !== prod.fecha_inicio ? ` — ${formatFecha(prod.fecha_fin)}` : ''}</div>
+      </div>
+      <div class="ficha-item">
+        <div class="ficha-label">Horario</div>
+        <div class="ficha-val mono">{prod.hora_inicio ? `${prod.hora_inicio}${prod.hora_fin ? ' – ' + prod.hora_fin : ''}` : '—'}</div>
+      </div>
+      <div class="ficha-item">
+        <div class="ficha-label">Ubicación maquillaje</div>
+        <div class="ficha-val">{prod.ubicacion_mua ?? <span class="text-muted">—</span>}</div>
+      </div>
+      <div class="ficha-item">
+        <div class="ficha-label">Ubicación shoot</div>
+        <div class="ficha-val">{prod.ubicacion_shoot ?? <span class="text-muted">—</span>}</div>
+      </div>
+      <div class="ficha-item">
+        <div class="ficha-label">Presupuesto</div>
+        <div class="ficha-val mono" style="color:var(--gold)">{prod.presupuesto ? fmt(prod.presupuesto) : '—'}</div>
+      </div>
+      <div class="ficha-item">
+        <div class="ficha-label">Equipo involucrado</div>
+        <div class="ficha-val">{prod.equipo_involucrado ?? <span class="text-muted">—</span>}</div>
+      </div>
+    </div>
+  </div>
+
+  {/* ── Modelos asignados ── */}
+  <div class="card" style="margin-bottom:24px">
+    <div class="card-meta" style="margin-bottom:8px">Modelos asignados</div>
+    {modelosAsignados && modelosAsignados.length > 0 ? (
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        {(modelosAsignados as any[]).map((m) => (
+          <a href={`/modelos/${m.id}`} class="chip" style="text-decoration:none;color:var(--gold)">
+            {m.nombre}{m.rol ? <span class="text-muted" style="margin-left:5px;font-size:10px">{m.rol}</span> : null}
+          </a>
+        ))}
+      </div>
+    ) : (
+      <p class="text-muted" style="font-size:12px;margin:0">Sin modelos registrados vinculados. Agrégalos como línea con rol "Modelo" eligiendo el modelo del catálogo.</p>
+    )}
+  </div>
+
+  {/* ── Links y archivos ── */}
+  {(prod.links_referencias || prod.archivos_referencias) && (
+    <div class="row" style="margin-bottom:24px">
+      {prod.links_referencias && (
+        <div class="col card">
+          <div class="card-meta" style="margin-bottom:8px">Links / referencias</div>
+          {String(prod.links_referencias).split('\n').filter((s: string) => s.trim()).map((line: string) => {
+            const t = line.trim();
+            return /^https?:\/\//.test(t)
+              ? <div><a href={t} target="_blank" rel="noopener" style="color:var(--gold);font-size:13px;word-break:break-all">{t}</a></div>
+              : <div style="font-size:13px">{t}</div>;
+          })}
+        </div>
+      )}
+      {prod.archivos_referencias && (
+        <div class="col card">
+          <div class="card-meta" style="margin-bottom:8px">Archivos / entregables</div>
+          {String(prod.archivos_referencias).split('\n').filter((s: string) => s.trim()).map((line: string) => {
+            const t = line.trim();
+            return /^https?:\/\//.test(t)
+              ? <div><a href={t} target="_blank" rel="noopener" style="color:var(--gold);font-size:13px;word-break:break-all">{t}</a></div>
+              : <div style="font-size:13px">{t}</div>;
+          })}
+        </div>
+      )}
+    </div>
+  )}
 
   {(prod.fecha_proxima_accion || prod.proximo_paso) && (
     <div class="card" style="margin-bottom:24px;border-left:3px solid var(--gold)">
@@ -363,13 +481,20 @@ const ROLES = [
       <div class="row">
         <div class="col">
           <label class="label">Rol</label>
-          <select class="select" name="linea_rol" required>
+          <select class="select" name="linea_rol" id="linea_rol" required>
             {ROLES.map((r) => <option value={r}>{r}</option>)}
+          </select>
+        </div>
+        <div class="col" id="col_modelo" style="display:none">
+          <label class="label">Modelo registrado</label>
+          <select class="select" name="linea_modelo_id" id="linea_modelo_id">
+            <option value="">— sin vincular / externo —</option>
+            {(modelosActivos as any[])?.map((m) => <option value={m.id}>{m.nombre}</option>)}
           </select>
         </div>
         <div class="col">
           <label class="label">Nombre</label>
-          <input class="input" name="linea_nombre" placeholder="Persona o proveedor" />
+          <input class="input" name="linea_nombre" id="linea_nombre" placeholder="Persona o proveedor" />
         </div>
         <div class="col">
           <label class="label">Cobro al cliente (MXN)</label>
@@ -427,4 +552,32 @@ const ROLES = [
   )}
 
   <NotasTimeline entidadTipo="produccion" entidadId={id} />
+
+  <style>
+    .ficha { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:16px 24px; }
+    .ficha-label { font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-2,#888); margin-bottom:3px; }
+    .ficha-val { font-size:14px; }
+  </style>
+
+  <script>
+    function syncModeloPicker() {
+      const rol = (document.getElementById('linea_rol') as HTMLSelectElement | null)?.value;
+      const col = document.getElementById('col_modelo');
+      const sel = document.getElementById('linea_modelo_id') as HTMLSelectElement | null;
+      const nom = document.getElementById('linea_nombre') as HTMLInputElement | null;
+      if (col) col.style.display = rol === 'Modelo' ? '' : 'none';
+      if (rol !== 'Modelo' && sel) sel.value = '';
+      // Al elegir un modelo, autollenar el nombre
+      if (sel && nom && sel.value) {
+        nom.value = sel.options[sel.selectedIndex]?.textContent?.trim() ?? nom.value;
+      }
+    }
+    document.getElementById('linea_rol')?.addEventListener('change', syncModeloPicker);
+    document.getElementById('linea_modelo_id')?.addEventListener('change', () => {
+      const sel = document.getElementById('linea_modelo_id') as HTMLSelectElement;
+      const nom = document.getElementById('linea_nombre') as HTMLInputElement | null;
+      if (nom && sel.value) nom.value = sel.options[sel.selectedIndex]?.textContent?.trim() ?? '';
+    });
+    syncModeloPicker();
+  </script>
 </Layout>

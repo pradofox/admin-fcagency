@@ -1,0 +1,120 @@
+---
+import Layout from '../../components/Layout.astro';
+import { requireUser } from '../../lib/session';
+import { getDB } from '../../lib/db';
+import { formatFecha } from '../../lib/fechas';
+
+const user = requireUser(Astro);
+const db = getDB(Astro);
+
+// Vista: pendientes (default, falta algo) | todas
+const vista = Astro.url.searchParams.get('vista') ?? 'pendientes';
+
+let where = `estado != 'archivado'`;
+if (vista === 'pendientes') {
+  where += ` AND (polas = 0 OR polas IS NULL OR book = 0 OR book IS NULL OR videocasting = 0 OR videocasting IS NULL)`;
+}
+
+const { results: modelos } = await db
+  .prepare(
+    `SELECT id, nombre, estado, polas, book, videocasting, drive_folder,
+            material_actualizado_en, material_notas
+     FROM modelos
+     WHERE ${where}
+     ORDER BY material_actualizado_en IS NULL DESC, material_actualizado_en ASC, nombre ASC
+     LIMIT 500`
+  )
+  .all<any>();
+
+// Conteo de qué falta
+const filas = (modelos ?? []).map((m: any) => {
+  const falta: string[] = [];
+  if (!m.polas) falta.push('Polas');
+  if (!m.book) falta.push('Book');
+  if (!m.videocasting) falta.push('Videocasting');
+  return { ...m, falta };
+});
+
+const totalPendientes = filas.filter((f: any) => f.falta.length > 0).length;
+const hoy = new Date().toISOString().slice(0, 10);
+
+// Días desde última actualización
+function diasDesde(fecha: string | null): number | null {
+  if (!fecha) return null;
+  const d = new Date(fecha + 'T00:00:00Z').getTime();
+  if (Number.isNaN(d)) return null;
+  return Math.floor((Date.now() - d) / 86400000);
+}
+
+const VISTAS = [
+  { v: 'pendientes', label: 'Con material pendiente' },
+  { v: 'todas', label: 'Todas' },
+];
+function vistaHref(v: string) {
+  return v === 'pendientes' ? '/modelos/material' : `/modelos/material?vista=${v}`;
+}
+---
+
+<Layout title="Material de modelos" pageTitle="Modelos">
+  <div class="page-head">
+    <div>
+      <h1 style="margin:0">Material de modelos</h1>
+      <div class="card-meta" style="margin-top:4px">
+        <span class="text-muted">{totalPendientes} modelo{totalPendientes === 1 ? '' : 's'} con material pendiente</span>
+      </div>
+    </div>
+    <a href="/modelos" class="btn btn-sm">Volver</a>
+  </div>
+
+  <div class="filters" style="margin-bottom:20px">
+    {VISTAS.map((x) => (
+      <a href={vistaHref(x.v)} class={`filter-chip ${vista === x.v ? 'active' : ''}`}>{x.label}</a>
+    ))}
+  </div>
+
+  {filas.length === 0 ? (
+    <div class="card" style="text-align:center;padding:40px">
+      <p class="text-muted">Ningún modelo con material pendiente. Todos los books están completos.</p>
+    </div>
+  ) : (
+    <div class="table-card">
+      <table>
+        <thead>
+          <tr>
+            <th>Modelo</th>
+            <th>Falta</th>
+            <th>Última actualización</th>
+            <th>Notas</th>
+            <th>Carpeta</th>
+          </tr>
+        </thead>
+        <tbody>
+          {filas.map((m: any) => {
+            const dias = diasDesde(m.material_actualizado_en);
+            return (
+              <tr>
+                <td><a href={`/modelos/${m.id}`} style="color:inherit;font-weight:500">{m.nombre}</a></td>
+                <td>
+                  {m.falta.length > 0
+                    ? m.falta.map((f: string) => <span class="chip" style="font-size:10px;color:var(--danger,#e25555);margin-right:4px">{f}</span>)
+                    : <span class="chip chip-ok" style="font-size:10px">completo</span>}
+                </td>
+                <td class="mono text-muted" style="white-space:nowrap">
+                  {m.material_actualizado_en
+                    ? <span style={dias != null && dias > 180 ? 'color:var(--danger,#e25555)' : ''}>{formatFecha(m.material_actualizado_en)}{dias != null ? ` · ${dias}d` : ''}</span>
+                    : <span style="color:var(--danger,#e25555)">sin registro</span>}
+                </td>
+                <td style="font-size:12px;max-width:280px">{m.material_notas ?? <span class="text-muted">—</span>}</td>
+                <td>
+                  {m.drive_folder && /^https?:\/\//.test(m.drive_folder)
+                    ? <a href={m.drive_folder} target="_blank" rel="noopener" style="color:var(--gold);font-size:12px">abrir →</a>
+                    : <span class="text-muted">—</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  )}
+</Layout>
