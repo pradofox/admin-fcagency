@@ -82,6 +82,16 @@ if (Astro.request.method === 'POST' && editable) {
     await db.prepare('UPDATE conceptos_servicio SET activo=0, updated_at=? WHERE id=?').bind(now(), id).run();
     return Astro.redirect('/proveedores');
   }
+
+  // ── Borrar concepto definitivamente ───────────────────────────────────────
+  // Los repartos se borran en cascada (FK ON DELETE CASCADE). Las líneas de
+  // cotización que lo usaron conservan sus datos; solo pierden el vínculo.
+  if (action === 'delete_concepto') {
+    await db.prepare('DELETE FROM repartos_concepto WHERE concepto_id=?').bind(id).run();
+    await db.prepare('UPDATE lineas_cotizacion SET concepto_id=NULL WHERE concepto_id=?').bind(id).run();
+    await db.prepare('DELETE FROM conceptos_servicio WHERE id=?').bind(id).run();
+    return Astro.redirect('/proveedores');
+  }
 }
 
 const concepto = await db.prepare('SELECT * FROM conceptos_servicio WHERE id=?').bind(id).first<any>();
@@ -332,13 +342,21 @@ const editRepartoId = Astro.url.searchParams.get('editar');
         <textarea class="textarea" name="notas">{concepto.notas ?? ''}</textarea>
         <div style="display:flex;gap:8px;margin-top:14px">
           <button type="submit" class="btn btn-primary">Guardar cambios</button>
-          <form method="POST" action={`/proveedores/${id}`} style="display:inline"
-                onsubmit="return confirm('¿Archivar este concepto?')">
-            <input type="hidden" name="_action" value="archivar" />
-            <button type="submit" class="btn btn-danger">Archivar</button>
-          </form>
         </div>
       </form>
+
+      <div style="display:flex;gap:8px;margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+        <form method="POST" action={`/proveedores/${id}`} style="display:inline"
+              onsubmit="return confirm('¿Archivar este concepto? Se ocultará del catálogo pero se conserva el historial.')">
+          <input type="hidden" name="_action" value="archivar" />
+          <button type="submit" class="btn">Archivar</button>
+        </form>
+        <form method="POST" action={`/proveedores/${id}`} style="display:inline"
+              onsubmit="return confirm('¿Borrar este concepto definitivamente? Se elimina junto con su reparto a proveedores. Esta acción no se puede deshacer.')">
+          <input type="hidden" name="_action" value="delete_concepto" />
+          <button type="submit" class="btn btn-danger">Eliminar definitivamente</button>
+        </form>
+      </div>
     </details>
   )}
 </Layout>
