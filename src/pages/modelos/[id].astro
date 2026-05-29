@@ -3,7 +3,7 @@ import Layout from '../../components/Layout.astro';
 import ModeloForm from '../../components/modelos/ModeloForm.astro';
 import { requireUser, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
-import { formatFecha } from '../../lib/fechas';
+import { formatFecha, calcularEdad, cumpleCorto, diasAlCumple } from '../../lib/fechas';
 
 const user = requireUser(Astro);
 const editable = canEdit(user);
@@ -153,7 +153,22 @@ const colorEstado: Record<string, string> = {
 
 <Layout title={`Editar — ${modelo.nombre}`} pageTitle={modelo.nombre as string}>
   <div class="page-head">
-    <h1>{modelo.nombre}</h1>
+    <div>
+      <h1 style="margin:0">{modelo.nombre}</h1>
+      {(() => {
+        const edad = calcularEdad(modelo.cumpleanos);
+        const corto = cumpleCorto(modelo.cumpleanos);
+        const dias = diasAlCumple(modelo.cumpleanos);
+        if (!corto) return null;
+        return (
+          <div class="card-meta" style="margin-top:4px">
+            <span class="text-muted">🎂 {corto}</span>
+            {edad != null && <span class="text-muted">{edad} años</span>}
+            {dias != null && dias <= 14 && <span style="color:#e879f9">{dias === 0 ? '¡es hoy!' : dias === 1 ? 'mañana' : `en ${dias} días`}</span>}
+          </div>
+        );
+      })()}
+    </div>
     <div style="display:flex;gap:10px">
       <a href="/modelos" class="btn btn-sm">Volver</a>
       {editable && (

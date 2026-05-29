@@ -2,7 +2,10 @@
 import Layout from '../../components/Layout.astro';
 import { requireUser, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
 import { formatFecha } from '../../lib/fechas';
+
+const PASOS_CASTING_DEFAULT = ['Brief recibido', 'Propuesta de modelos', 'Selección del cliente', 'Confirmación', 'Realizado'];
 
 const user     = requireUser(Astro);
 const editable = canEdit(user);
@@ -31,6 +34,28 @@ if (Astro.request.method === 'POST' && editable) {
         .run();
       msgOk = 'Cliente actualizado.';
     }
+  } else if (action === 'crear_casting') {
+    const clienteRow = await db.prepare('SELECT nombre FROM clientes WHERE id = ?').bind(id).first<any>();
+    const castingId = newId();
+    const ts = now();
+    await db
+      .prepare(
+        `INSERT INTO castings (id, cliente, cliente_id, marca_id, tipo, fecha, hora, lugar, perfil, etapa, notas, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Abierto', ?, ?, ?)`
+      )
+      .bind(
+        castingId, clienteRow?.nombre ?? '', id, get('marca_id'), get('tipo'),
+        get('fecha'), get('hora'), get('lugar'), get('perfil'), get('notas'), ts, ts
+      )
+      .run();
+    // Sembrar los pasos del proceso por defecto
+    for (let i = 0; i < PASOS_CASTING_DEFAULT.length; i++) {
+      await db
+        .prepare('INSERT INTO casting_procesos (id, casting_id, paso, orden, created_at) VALUES (?, ?, ?, ?, ?)')
+        .bind(newId(), castingId, PASOS_CASTING_DEFAULT[i], i, ts)
+        .run();
+    }
+    return Astro.redirect(`/castings/${castingId}`);
   }
 }
 
@@ -51,12 +76,29 @@ const { results: producciones } = await db
   )
   .bind(id).all<any>();
 
+// Castings de este cliente (por vínculo cliente_id o, legado, por nombre)
+const { results: castingsCliente } = await db
+  .prepare(
+    `SELECT c.id, c.tipo, c.fecha, c.etapa, c.perfil,
+            (SELECT COUNT(*) FROM casting_procesos cp WHERE cp.casting_id = c.id AND cp.hecho = 1) as pasos_hechos,
+            (SELECT COUNT(*) FROM casting_procesos cp WHERE cp.casting_id = c.id) as pasos_total
+     FROM castings c
+     WHERE c.cliente_id = ? OR (c.cliente_id IS NULL AND c.cliente = ?)
+     ORDER BY c.fecha DESC NULLS LAST, c.created_at DESC`
+  )
+  .bind(id, cliente.nombre)
+  .all<any>();
+
+const marcasCasting = marcas;
+
 const totalCobrado   = (producciones ?? []).reduce((s: number, p: any) => s + (p.total ?? 0), 0);
 const totalPagado    = (producciones ?? [])
   .filter((p: any) => p.pago_cliente_estado === 'pagado')
   .reduce((s: number, p: any) => s + (p.total ?? 0), 0);
 
 const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
+
+const chipEtapa: Record<string, string> = { Abierto: 'chip', 'Selección': 'chip-warning', Confirmado: 'chip-gold', Realizado: 'chip-ok', Cancelado: 'chip-danger' };
 ---
 
 <Layout title={cliente.nombre} pageTitle="Clientes">
@@ -120,6 +162,77 @@ const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
       </div>
     </div>
   )}
+
+  {/* ── Castings ── */}
+  <div style="margin-bottom:32px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h2 style="margin:0">Castings <small class="text-muted" style="font-size:12px;letter-spacing:0;text-transform:none">{castingsCliente?.length ?? 0}</small></h2>
+    </div>
+
+    {castingsCliente && castingsCliente.length > 0 ? (
+      <div class="table-card" style="margin-bottom:14px">
+        <table>
+          <thead>
+            <tr><th>Tipo</th><th>Fecha</th><th>Etapa</th><th>Proceso</th><th>Perfil</th></tr>
+          </thead>
+          <tbody>
+            {(castingsCliente as any[]).map((c) => (
+                <tr>
+                  <td><a href={`/castings/${c.id}`} style="color:inherit;font-weight:500">{c.tipo ?? 'Casting'}</a></td>
+                  <td class="mono text-muted">{c.fecha ? formatFecha(c.fecha) : '—'}</td>
+                  <td><span class={`chip ${chipEtapa[c.etapa] ?? ''}`}>{c.etapa}</span></td>
+                  <td class="mono text-muted">{c.pasos_hechos}/{c.pasos_total}</td>
+                  <td style="font-size:12px;max-width:240px">{c.perfil ?? <span class="text-muted">—</span>}</td>
+                </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    ) : (
+      <p class="text-muted" style="font-size:13px;margin-bottom:14px">Sin castings para este cliente.</p>
+    )}
+
+    {editable && (
+      <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px">
+        <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Nuevo casting</summary>
+        <form method="POST" action={`/clientes/${id}`} style="margin-top:16px">
+          <input type="hidden" name="_action" value="crear_casting" />
+          <div class="row">
+            <div class="col">
+              <label class="label">Tipo</label>
+              <select class="select" name="tipo">
+                <option value="">— sin asignar —</option>
+                {['Editorial', 'Comercial', 'Pasarela', 'Video', 'Fitting', 'Evento', 'Otro'].map((t) => <option value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div class="col">
+              <label class="label">Marca</label>
+              <select class="select" name="marca_id">
+                <option value="">— sin asignar —</option>
+                {(marcasCasting as any[]).map((m) => <option value={m.id} selected={cliente.marca_id === m.id}>{m.nombre}</option>)}
+              </select>
+            </div>
+            <div class="col">
+              <label class="label">Fecha</label>
+              <input class="input" type="date" name="fecha" />
+            </div>
+            <div class="col">
+              <label class="label">Hora</label>
+              <input class="input" type="time" name="hora" />
+            </div>
+          </div>
+          <label class="label">Lugar</label>
+          <input class="input" name="lugar" />
+          <label class="label">Perfil buscado</label>
+          <textarea class="textarea" name="perfil" placeholder="Ej. mujer 22-28, 1.75+, sport-luxury"></textarea>
+          <label class="label">Notas</label>
+          <textarea class="textarea" name="notas"></textarea>
+          <p class="text-muted" style="font-size:11px;margin-top:8px">Se crearán los pasos del proceso: {PASOS_CASTING_DEFAULT.join(' · ')}.</p>
+          <button type="submit" class="btn btn-primary" style="margin-top:12px">Crear casting</button>
+        </form>
+      </details>
+    )}
+  </div>
 
   {/* ── Datos fiscales (mostrar si existen) ── */}
   {(cliente.rfc || cliente.razon_social) && (

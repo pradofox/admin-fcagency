@@ -33,3 +33,18 @@ export function canEdit(user: SessionUser | null): boolean {
 export function isAdmin(user: SessionUser | null): boolean {
   return user?.rol === 'admin';
 }
+
+/**
+ * True si el user puede escribir sobre una marca específica.
+ * - admin: todas las marcas.
+ * - editor: solo si la marca está en su scope (editor sin scope = todas, retro-compat).
+ * - viewer: nunca.
+ */
+export function canEditMarca(user: SessionUser | null, marcaId: string | null | undefined): boolean {
+  if (!user) return false;
+  if (user.rol === 'admin') return true;
+  if (user.rol !== 'editor') return false;
+  if (!user.marcas || user.marcas.length === 0) return true;
+  if (!marcaId) return true;
+  return user.marcas.includes(marcaId);
+}

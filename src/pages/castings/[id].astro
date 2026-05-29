@@ -2,6 +2,8 @@
 import Layout from '../../components/Layout.astro';
 import { requireUser, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
+import { formatFecha } from '../../lib/fechas';
 
 const user = requireUser(Astro);
 const editable = canEdit(user);
@@ -48,6 +50,28 @@ if (Astro.request.method === 'POST' && editable) {
       await db.prepare('UPDATE castings SET etapa = ?, updated_at = ? WHERE id = ?').bind(etapa, now(), id).run();
       mensaje = 'Etapa actualizada.';
     }
+  } else if (action === 'add_proceso') {
+    const paso = (form.get('paso') as string)?.trim();
+    if (paso) {
+      const ord = await db.prepare('SELECT COALESCE(MAX(orden), -1) + 1 as n FROM casting_procesos WHERE casting_id = ?').bind(id).first<any>();
+      await db
+        .prepare('INSERT INTO casting_procesos (id, casting_id, paso, orden, created_at) VALUES (?, ?, ?, ?, ?)')
+        .bind(newId(), id, paso, ord?.n ?? 0, now())
+        .run();
+      mensaje = 'Paso agregado.';
+    }
+  } else if (action === 'toggle_proceso') {
+    const procesoId = form.get('proceso_id') as string;
+    const hecho = form.get('hecho') === '1' ? 1 : 0;
+    if (procesoId) {
+      await db
+        .prepare('UPDATE casting_procesos SET hecho = ?, fecha = ? WHERE id = ? AND casting_id = ?')
+        .bind(hecho, hecho ? new Date().toISOString().slice(0, 10) : null, procesoId, id)
+        .run();
+    }
+  } else if (action === 'delete_proceso') {
+    const procesoId = form.get('proceso_id') as string;
+    if (procesoId) await db.prepare('DELETE FROM casting_procesos WHERE id = ? AND casting_id = ?').bind(procesoId, id).run();
   } else {
     // Update casting general
     const cliente = (form.get('cliente') as string)?.trim();
@@ -80,6 +104,17 @@ if (!casting) return Astro.redirect('/castings');
 
 const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<{ id: string; nombre: string }>()).results ?? [];
 
+const clienteVinculado = casting.cliente_id
+  ? await db.prepare('SELECT id, nombre FROM clientes WHERE id = ?').bind(casting.cliente_id).first<any>()
+  : null;
+
+const { results: procesos } = await db
+  .prepare('SELECT id, paso, hecho, fecha, nota FROM casting_procesos WHERE casting_id = ? ORDER BY orden, created_at')
+  .bind(id)
+  .all<any>();
+const pasosHechos = (procesos ?? []).filter((p: any) => p.hecho).length;
+const pasosTotal = (procesos ?? []).length;
+
 const { results: propuestos } = await db
   .prepare(
     `SELECT m.id, m.nombre, m.instagram, m.ciudad, m.estado
@@ -105,7 +140,14 @@ const chipEtapa: Record<string, string> = {
 
 <Layout title={`Casting — ${casting.cliente}`} pageTitle={`Casting · ${casting.cliente}`}>
   <div class="page-head">
-    <h1>{casting.cliente}</h1>
+    <div>
+      <h1 style="margin:0">{casting.cliente}</h1>
+      {clienteVinculado && (
+        <div class="card-meta" style="margin-top:4px">
+          <a href={`/clientes/${clienteVinculado.id}`} style="color:var(--gold)">↗ Ver cliente</a>
+        </div>
+      )}
+    </div>
     <div style="display:flex;gap:10px">
       <a href="/castings" class="btn btn-sm">Volver</a>
       {editable && (
@@ -158,6 +200,54 @@ const chipEtapa: Record<string, string> = {
       <p style="margin-top:8px">{casting.perfil}</p>
     </div>
   )}
+
+  {/* ── Proceso del casting ── */}
+  <div style="margin-bottom:32px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h2 style="margin:0">Proceso <small class="text-muted" style="font-size:12px;letter-spacing:0;font-family:var(--font-body);text-transform:none">{pasosHechos}/{pasosTotal}</small></h2>
+    </div>
+
+    {procesos && procesos.length > 0 ? (
+      <div class="card" style="margin-bottom:14px">
+        {(procesos as any[]).map((p) => (
+          <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
+            {editable ? (
+              <form method="POST" action={`/castings/${id}`} style="display:inline;line-height:0">
+                <input type="hidden" name="_action" value="toggle_proceso" />
+                <input type="hidden" name="proceso_id" value={p.id} />
+                <input type="hidden" name="hecho" value={p.hecho ? '0' : '1'} />
+                <button type="submit" title={p.hecho ? 'Marcar pendiente' : 'Marcar hecho'} style={`width:20px;height:20px;border-radius:4px;border:1px solid ${p.hecho ? 'var(--text-ok,#4ade80)' : 'var(--border)'};background:${p.hecho ? 'var(--text-ok,#4ade80)' : 'transparent'};color:#000;cursor:pointer;font-size:12px;line-height:1`}>{p.hecho ? '✓' : ''}</button>
+              </form>
+            ) : (
+              <span style={`width:20px;height:20px;border-radius:4px;border:1px solid ${p.hecho ? 'var(--text-ok,#4ade80)' : 'var(--border)'};background:${p.hecho ? 'var(--text-ok,#4ade80)' : 'transparent'};color:#000;font-size:12px;text-align:center;line-height:20px`}>{p.hecho ? '✓' : ''}</span>
+            )}
+            <span style={`flex:1;font-size:14px;${p.hecho ? 'color:var(--text-muted,#888);text-decoration:line-through' : ''}`}>{p.paso}</span>
+            {p.fecha && <span class="mono text-muted" style="font-size:11px">{formatFecha(p.fecha)}</span>}
+            {editable && (
+              <form method="POST" action={`/castings/${id}`} style="display:inline">
+                <input type="hidden" name="_action" value="delete_proceso" />
+                <input type="hidden" name="proceso_id" value={p.id} />
+                <button type="submit" class="btn btn-sm btn-danger" style="padding:2px 7px">×</button>
+              </form>
+            )}
+          </div>
+        ))}
+      </div>
+    ) : (
+      <p class="text-muted" style="font-size:13px;margin-bottom:14px">Sin pasos. Agrega los pasos del proceso de este casting.</p>
+    )}
+
+    {editable && (
+      <form method="POST" action={`/castings/${id}`} style="display:flex;gap:10px;align-items:flex-end">
+        <input type="hidden" name="_action" value="add_proceso" />
+        <div style="flex:1">
+          <label class="label">Nuevo paso</label>
+          <input class="input" name="paso" placeholder="Ej. Enviar opciones al cliente" required />
+        </div>
+        <button type="submit" class="btn btn-primary">Agregar paso</button>
+      </form>
+    )}
+  </div>
 
   {seleccionada && (
     <>

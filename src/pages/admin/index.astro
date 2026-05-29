@@ -26,12 +26,26 @@ if (Astro.request.method === 'POST') {
   } else if (action === 'delete_sessions') {
     await db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId).run();
     mensaje = 'Sesiones cerradas.';
+  } else if (action === 'assign_marcas') {
+    const marcasSel = form.getAll('marca').map((v) => String(v)).filter(Boolean);
+    await db.prepare('UPDATE users SET marcas = ?, updated_at = ? WHERE id = ?')
+      .bind(JSON.stringify(marcasSel), now(), userId).run();
+    mensaje = 'Marcas asignadas. El usuario debe reiniciar sesión para aplicar el cambio.';
   }
 }
 
 const { results: users } = await db
-  .prepare('SELECT id, email, nombre, rol, activo, created_at FROM users ORDER BY created_at DESC')
-  .all<{ id: string; email: string; nombre: string; rol: string; activo: number; created_at: number }>();
+  .prepare('SELECT id, email, nombre, rol, marcas, activo, created_at FROM users ORDER BY created_at DESC')
+  .all<{ id: string; email: string; nombre: string; rol: string; marcas: string | null; activo: number; created_at: number }>();
+
+const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<{ id: string; nombre: string }>()).results ?? [];
+
+function parseMarcas(raw: string | null): string[] {
+  try { return raw ? JSON.parse(raw) : []; } catch { return []; }
+}
+function nombreMarca(mid: string): string {
+  return marcas.find((m) => m.id === mid)?.nombre ?? mid;
+}
 ---
 
 <Layout title="Admin" pageTitle="Administración">
@@ -43,10 +57,15 @@ const { results: users } = await db
     </div>
   </div>
 
-  <p class="text-muted" style="font-size:12px;margin-bottom:24px">
-    Solo administradores ven esta página. Cambia roles, desactiva cuentas o cierra sesiones.
+  <p class="text-muted" style="font-size:12px;margin-bottom:8px">
+    Solo administradores ven esta página. Cambia roles, asigna marcas (scope), desactiva cuentas o cierra sesiones.
     Auto-registro está abierto: cualquiera con la URL puede crear cuenta como viewer.
   </p>
+  <div class="card" style="margin-bottom:24px;font-size:12px;line-height:1.7">
+    <strong style="color:var(--gold)">Roles:</strong>
+    <span class="text-muted"><b>admin</b> = todo; <b>editor</b> = lee y escribe (limitado a sus marcas si se le asignan; sin marcas = todas); <b>viewer</b> = solo lectura.</span>
+    <br /><span class="text-muted">El scope de marcas se aplica al reiniciar sesión del usuario.</span>
+  </div>
 
   {mensaje && <p class="text-ok" style="margin-bottom:20px">{mensaje}</p>}
 
@@ -57,6 +76,7 @@ const { results: users } = await db
           <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Nombre</th>
           <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Email</th>
           <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Rol</th>
+          <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Marcas (scope)</th>
           <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Estado</th>
           <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Creado</th>
           <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Acciones</th>
@@ -77,6 +97,35 @@ const { results: users } = await db
                   ))}
                 </select>
               </form>
+            </td>
+            <td style="padding:12px 10px">
+              {(() => {
+                const asignadas = parseMarcas(u.marcas);
+                if (u.rol === 'admin') return <span class="text-muted" style="font-size:11px">todas</span>;
+                if (marcas.length === 0) return <span class="text-muted" style="font-size:11px">—</span>;
+                return (
+                  <details>
+                    <summary style="cursor:pointer;font-size:12px;list-style:none">
+                      {asignadas.length === 0
+                        ? <span class="text-muted">todas</span>
+                        : asignadas.map((mid) => <span class="chip" style="font-size:10px;margin-right:3px">{nombreMarca(mid)}</span>)}
+                      <span style="color:var(--gold);margin-left:4px;font-size:11px">editar</span>
+                    </summary>
+                    <form method="POST" action="/admin" style="margin-top:8px;display:flex;flex-direction:column;gap:5px">
+                      <input type="hidden" name="_action" value="assign_marcas" />
+                      <input type="hidden" name="user_id" value={u.id} />
+                      {marcas.map((mk) => (
+                        <label style="display:flex;align-items:center;gap:6px;font-size:12px">
+                          <input type="checkbox" name="marca" value={mk.id} checked={asignadas.includes(mk.id)} />
+                          {mk.nombre}
+                        </label>
+                      ))}
+                      <button type="submit" class="btn btn-sm btn-primary" style="margin-top:4px;align-self:flex-start">Guardar</button>
+                      <span class="text-muted" style="font-size:10px">Sin marcas = acceso a todas.</span>
+                    </form>
+                  </details>
+                );
+              })()}
             </td>
             <td style="padding:12px 10px">
               <form method="POST" action="/admin" style="display:inline">

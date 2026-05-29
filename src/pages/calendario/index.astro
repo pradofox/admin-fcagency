@@ -2,11 +2,12 @@
 import Layout from '../../components/Layout.astro';
 import { requireUser } from '../../lib/session';
 import { getDB } from '../../lib/db';
+import { parseCumpleanos } from '../../lib/fechas';
 
 const user = requireUser(Astro);
 const db = getDB(Astro);
 
-const TIPOS = ['Tarea', 'Producción', 'Fitting', 'Booking', 'Campaña', 'Junta', 'Estudio'] as const;
+const TIPOS = ['Tarea', 'Producción', 'Fitting', 'Booking', 'Campaña', 'Junta', 'Estudio', 'Cumpleaños'] as const;
 type Tipo = typeof TIPOS[number];
 
 interface Event {
@@ -26,6 +27,18 @@ const filtrosActivos: Set<Tipo> = filtroParam
   ? new Set(filtroParam.split(',').filter((t): t is Tipo => (TIPOS as readonly string[]).includes(t)))
   : new Set(TIPOS);
 const soloMias = params.get('mias') === '1';
+
+// Filtros por marca / cliente (afectan producciones y derivados)
+const marcaFiltro   = params.get('marca') || null;
+const clienteFiltro = params.get('cliente') || null;
+const prodFiltrada  = !!(marcaFiltro || clienteFiltro);
+const prodWhereExtra = `${marcaFiltro ? ' AND marca_id = ?' : ''}${clienteFiltro ? ' AND cliente_id = ?' : ''}`;
+const prodBindsExtra: any[] = [];
+if (marcaFiltro) prodBindsExtra.push(marcaFiltro);
+if (clienteFiltro) prodBindsExtra.push(clienteFiltro);
+
+const marcasList   = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<any>()).results ?? [];
+const clientesList = (await db.prepare('SELECT id, nombre FROM clientes ORDER BY nombre').all<any>()).results ?? [];
 
 // Filtro por modelo: el "calendario por perfil de modelo" es este mismo calendario
 // restringido a las producciones donde aparece ese modelo.
@@ -65,7 +78,7 @@ const endStr   = gridEnd.toISOString().slice(0, 10);
 let events: Event[] = [];
 
 // ── Tareas ──────────────────────────────────────────────────────────────────
-if (filtrosActivos.has('Tarea')) {
+if (filtrosActivos.has('Tarea') && !prodFiltrada) {
   const cond   = soloMias ? 'AND a.asignado_a = ?' : '';
   const binds: any[] = [startStr, endStr];
   if (soloMias) binds.push(user.id);
@@ -90,8 +103,8 @@ if (filtrosActivos.has('Producción')) {
               FROM producciones
               WHERE fecha_inicio BETWEEN ? AND ?
                 AND estado != 'cancelada'
-                AND (tipo_produccion IS NULL OR tipo_produccion NOT IN ('Fitting','Booking','Campaña'))`)
-    .bind(startStr, endStr)
+                AND (tipo_produccion IS NULL OR tipo_produccion NOT IN ('Fitting','Booking','Campaña'))${prodWhereExtra}`)
+    .bind(startStr, endStr, ...prodBindsExtra)
     .all<any>();
   events.push(...(prods ?? []).map((e: any) => ({
     fecha: e.fecha, tipo: 'Producción' as const,
@@ -107,8 +120,8 @@ if (filtrosActivos.has('Fitting')) {
               FROM producciones
               WHERE fecha_inicio BETWEEN ? AND ?
                 AND estado != 'cancelada'
-                AND tipo_produccion = 'Fitting'`)
-    .bind(startStr, endStr)
+                AND tipo_produccion = 'Fitting'${prodWhereExtra}`)
+    .bind(startStr, endStr, ...prodBindsExtra)
     .all<any>();
   events.push(...(fittings ?? []).map((e: any) => ({
     fecha: e.fecha, tipo: 'Fitting' as const,
@@ -123,8 +136,8 @@ if (filtrosActivos.has('Booking')) {
               FROM producciones
               WHERE fecha_inicio BETWEEN ? AND ?
                 AND estado != 'cancelada'
-                AND tipo_produccion = 'Booking'`)
-    .bind(startStr, endStr)
+                AND tipo_produccion = 'Booking'${prodWhereExtra}`)
+    .bind(startStr, endStr, ...prodBindsExtra)
     .all<any>();
   events.push(...(bookings ?? []).map((e: any) => ({
     fecha: e.fecha, tipo: 'Booking' as const,
@@ -139,8 +152,8 @@ if (filtrosActivos.has('Campaña')) {
               FROM producciones
               WHERE fecha_inicio BETWEEN ? AND ?
                 AND estado != 'cancelada'
-                AND tipo_produccion = 'Campaña'`)
-    .bind(startStr, endStr)
+                AND tipo_produccion = 'Campaña'${prodWhereExtra}`)
+    .bind(startStr, endStr, ...prodBindsExtra)
     .all<any>();
   events.push(...(campanas ?? []).map((e: any) => ({
     fecha: e.fecha, tipo: 'Campaña' as const,
@@ -149,7 +162,7 @@ if (filtrosActivos.has('Campaña')) {
 }
 
 // ── Juntas (sala de juntas District) ─────────────────────────────────────────
-if (filtrosActivos.has('Junta')) {
+if (filtrosActivos.has('Junta') && !prodFiltrada) {
   const { results: juntas } = await db
     .prepare(`SELECT rc.id, rc.fecha, rc.hora_inicio, rc.titulo, mi.nombre as miembro_nombre, rc.invitado_libre
               FROM reservas_cowork rc
@@ -165,7 +178,7 @@ if (filtrosActivos.has('Junta')) {
 }
 
 // ── Estudio foto/video ────────────────────────────────────────────────────────
-if (filtrosActivos.has('Estudio')) {
+if (filtrosActivos.has('Estudio') && !prodFiltrada) {
   const { results: estudio } = await db
     .prepare(`SELECT re.id, re.fecha, re.hora_inicio, re.tipo, mi.nombre as miembro_nombre, re.cliente_libre
               FROM reservas_estudio re
@@ -178,6 +191,29 @@ if (filtrosActivos.has('Estudio')) {
     titulo: `${e.tipo} · ${e.miembro_nombre ?? e.cliente_libre ?? 'Reserva'}${e.hora_inicio ? ' ' + e.hora_inicio : ''}`,
     href: `/district/estudio/${e.id}`
   })));
+}
+
+// ── Cumpleaños de modelos ─────────────────────────────────────────────────────
+if (filtrosActivos.has('Cumpleaños') && !prodFiltrada && !modeloFiltro) {
+  const { results: mods } = await db
+    .prepare(`SELECT id, nombre, cumpleanos FROM modelos
+              WHERE estado != 'archivado' AND cumpleanos IS NOT NULL AND TRIM(cumpleanos) != ''`)
+    .all<any>();
+  const gridYears = new Set([gridStart.getUTCFullYear(), gridEnd.getUTCFullYear()]);
+  for (const mo of mods ?? []) {
+    const c = parseCumpleanos(mo.cumpleanos);
+    if (!c) continue;
+    for (const yr of gridYears) {
+      const iso = `${yr}-${String(c.mes).padStart(2, '0')}-${String(c.dia).padStart(2, '0')}`;
+      if (iso < startStr || iso > endStr) continue;
+      const edad = c.anio ? yr - c.anio : null;
+      events.push({
+        fecha: iso, tipo: 'Cumpleaños' as const,
+        titulo: `🎂 ${mo.nombre}${edad != null ? ` (${edad})` : ''}`,
+        href: `/modelos/${mo.id}`,
+      });
+    }
+  }
 }
 
 // ── Filtro por modelo: solo eventos de producción de ese modelo ──────────────
@@ -209,6 +245,8 @@ function buildHref(overrides: Record<string, string | undefined>) {
   if (filtroParam) p.set('show', filtroParam);
   if (soloMias) p.set('mias', '1');
   if (modeloFiltro) p.set('modelo', modeloFiltro);
+  if (marcaFiltro) p.set('marca', marcaFiltro);
+  if (clienteFiltro) p.set('cliente', clienteFiltro);
   for (const k in overrides) {
     const v = overrides[k];
     if (v === undefined || v === '') p.delete(k); else p.set(k, v);
@@ -240,7 +278,8 @@ const chipColor: Record<Tipo, string> = {
   'Booking':    'cal-booking',
   'Campaña':    'cal-campana',
   'Junta':      'cal-junta',
-  'Estudio':    'cal-estudio'
+  'Estudio':    'cal-estudio',
+  'Cumpleaños': 'cal-cumple'
 };
 
 const labelTipo: Record<Tipo, string> = {
@@ -250,7 +289,8 @@ const labelTipo: Record<Tipo, string> = {
   'Booking':    'Bookings',
   'Campaña':    'Campañas',
   'Junta':      'Juntas',
-  'Estudio':    'Estudio'
+  'Estudio':    'Estudio',
+  'Cumpleaños': 'Cumpleaños'
 };
 
 const diasSemana = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
@@ -287,12 +327,29 @@ const diasSemana = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
     ))}
   </div>
 
-  <div class="filters" style="margin-bottom:24px">
+  <div class="filters" style="margin-bottom:16px">
     <a href={buildHref({ mias: soloMias ? undefined : '1' })} class={`filter-chip ${soloMias ? 'active' : ''}`}>
       {soloMias ? '★' : '☆'} solo mis tareas
     </a>
-    <a href="/calendario" class="filter-chip">todas las categorías</a>
+    <a href="/calendario" class="filter-chip">limpiar filtros</a>
   </div>
+
+  {/* Filtros por marca / cliente (solo afectan producciones) */}
+  <form method="GET" action="/calendario" id="cal-filtros" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:24px;align-items:center">
+    {mesActual !== `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}` && <input type="hidden" name="mes" value={mesActual} />}
+    {filtroParam && <input type="hidden" name="show" value={filtroParam} />}
+    {soloMias && <input type="hidden" name="mias" value="1" />}
+    <select class="select" name="marca" onchange="document.getElementById('cal-filtros').submit()" style="font-size:12px;padding:6px 10px;max-width:200px">
+      <option value="">Todas las marcas</option>
+      {(marcasList as any[]).map((mk) => <option value={mk.id} selected={marcaFiltro === mk.id}>{mk.nombre}</option>)}
+    </select>
+    <select class="select" name="cliente" onchange="document.getElementById('cal-filtros').submit()" style="font-size:12px;padding:6px 10px;max-width:220px">
+      <option value="">Todos los clientes</option>
+      {(clientesList as any[]).map((cl) => <option value={cl.id} selected={clienteFiltro === cl.id}>{cl.nombre}</option>)}
+    </select>
+    {prodFiltrada && <a href={buildHref({ marca: undefined, cliente: undefined })} class="filter-chip">✕ quitar</a>}
+    {prodFiltrada && <span class="text-muted" style="font-size:11px">Mostrando solo producciones del filtro.</span>}
+  </form>
 
   <div class="cal-grid">
     {diasSemana.map((d) => <div class="cal-weekday">{d}</div>)}
@@ -334,6 +391,7 @@ const diasSemana = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
     .cal-campana  { border-left-color:#6ab7ff; }
     .cal-junta    { border-left-color:#34d399; }
     .cal-estudio  { border-left-color:#fb923c; }
+    .cal-cumple   { border-left-color:#e879f9; }
     /* Filtros activos */
     .cal-filter.cal-tarea.active   { border-left:3px solid #e9b949; }
     .cal-filter.cal-prod.active    { border-left:3px solid var(--gold); }
@@ -342,6 +400,7 @@ const diasSemana = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
     .cal-filter.cal-campana.active { border-left:3px solid #6ab7ff; }
     .cal-filter.cal-junta.active   { border-left:3px solid #34d399; }
     .cal-filter.cal-estudio.active { border-left:3px solid #fb923c; }
+    .cal-filter.cal-cumple.active  { border-left:3px solid #e879f9; }
     @media (max-width:768px) {
       .cal-cell { min-height:80px; padding:4px; }
       .cal-event { font-size:10px; }

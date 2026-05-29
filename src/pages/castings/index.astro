@@ -48,8 +48,8 @@ const filtroEtapa = Astro.url.searchParams.get('etapa') ?? 'todos';
 const etapas = ['todos', 'Abierto', 'Selección', 'Confirmado', 'Realizado'];
 
 const sql = filtroEtapa === 'todos'
-  ? `SELECT id, cliente, marca_id, tipo, fecha, etapa, perfil FROM castings ORDER BY fecha DESC NULLS LAST LIMIT 200`
-  : `SELECT id, cliente, marca_id, tipo, fecha, etapa, perfil FROM castings WHERE etapa = ? ORDER BY fecha DESC NULLS LAST LIMIT 200`;
+  ? `SELECT id, cliente, cliente_id, marca_id, tipo, fecha, etapa, perfil FROM castings ORDER BY fecha DESC NULLS LAST LIMIT 200`
+  : `SELECT id, cliente, cliente_id, marca_id, tipo, fecha, etapa, perfil FROM castings WHERE etapa = ? ORDER BY fecha DESC NULLS LAST LIMIT 200`;
 const stmt = filtroEtapa === 'todos' ? db.prepare(sql) : db.prepare(sql).bind(filtroEtapa);
 const { results } = await stmt.all<any>();
 
@@ -142,16 +142,16 @@ const chipEtapa: Record<string, string> = {
   {results && results.length > 0 ? (
     <div class="grid">
       {results.map((c: any) => (
-        <article class="card">
+        <a href={`/castings/${c.id}`} class="card" style="display:block;color:inherit;text-decoration:none">
           <div class="card-title">{c.cliente}</div>
           <div class="card-meta">
             <span class={`chip ${chipEtapa[c.etapa] ?? ''}`}>{c.etapa}</span>
-            {c.marca_id && <span>{c.marca_id}</span>}
             {c.tipo && <span>{c.tipo}</span>}
             {c.fecha && <span class="text-muted">{c.fecha}</span>}
+            {c.cliente_id && <span class="text-muted">↗ cliente</span>}
           </div>
           {c.perfil && <p class="text-muted" style="font-size:12px;margin-top:10px">{c.perfil}</p>}
-        </article>
+        </a>
       ))}
     </div>
   ) : (

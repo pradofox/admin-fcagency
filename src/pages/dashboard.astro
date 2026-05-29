@@ -2,7 +2,7 @@
 import Layout from '../components/Layout.astro';
 import { requireUser } from '../lib/session';
 import { getDB } from '../lib/db';
-import { formatFecha } from '../lib/fechas';
+import { formatFecha, diasAlCumple, calcularEdad, cumpleCorto } from '../lib/fechas';
 
 const user = requireUser(Astro);
 const db = getDB(Astro);
@@ -79,8 +79,21 @@ const { results: proxProds } = await db
   )
   .all<any>();
 
-// Cumpleaños esta semana de modelos (cumpleanos puede ser TEXT libre, así que esto es best-effort)
-// Lo skip por ahora porque el formato es heterogéneo.
+// Próximos cumpleaños de modelos (cumpleanos es TEXT libre → se parsea en JS)
+const { results: modsCumple } = await db
+  .prepare(`SELECT id, nombre, cumpleanos FROM modelos
+            WHERE estado != 'archivado' AND cumpleanos IS NOT NULL AND TRIM(cumpleanos) != ''`)
+  .all<any>();
+const proxCumples = (modsCumple ?? [])
+  .map((m: any) => ({
+    id: m.id, nombre: m.nombre,
+    dias: diasAlCumple(m.cumpleanos),
+    edad: calcularEdad(m.cumpleanos),
+    cuando: cumpleCorto(m.cumpleanos),
+  }))
+  .filter((x: any) => x.dias != null && x.dias <= 30)
+  .sort((a: any, b: any) => a.dias - b.dias)
+  .slice(0, 8);
 
 // Producciones por marca con totales
 const { results: porMarca } = await db
@@ -228,6 +241,28 @@ const fmt = (n: number | null) =>
       )}
     </div>
   </div>
+
+  {proxCumples.length > 0 && (
+    <div style="margin-bottom:36px">
+      <h2 style="margin-bottom:14px">Próximos cumpleaños</h2>
+      <div class="row" style="flex-wrap:wrap;gap:10px">
+        {proxCumples.map((c: any) => {
+          const cuandoTxt = c.dias === 0 ? 'HOY' : c.dias === 1 ? 'mañana' : `en ${c.dias}d`;
+          const edadFutura = c.edad != null ? c.edad + (c.dias === 0 ? 0 : 1) : null;
+          return (
+            <a href={`/modelos/${c.id}`} class="card" style={`flex:1;min-width:160px;color:inherit;text-decoration:none;${c.dias <= 1 ? 'border-left:3px solid #e879f9' : ''}`}>
+              <div style="font-weight:500;font-size:14px">🎂 {c.nombre}</div>
+              <div class="card-meta" style="margin-top:4px">
+                <span style={c.dias <= 1 ? 'color:#e879f9' : 'color:var(--gold)'}>{cuandoTxt}</span>
+                {c.cuando && <span class="text-muted">{c.cuando}</span>}
+                {edadFutura != null && <span class="text-muted">cumple {edadFutura}</span>}
+              </div>
+            </a>
+          );
+        })}
+      </div>
+    </div>
+  )}
 
   <h2>Producciones por marca</h2>
   <div class="table-card" style="margin-bottom:28px">
