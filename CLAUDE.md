@@ -1,16 +1,19 @@
 # admin-fcagency
 
-Plataforma admin unificada del Universo FC Agency. Reemplaza las 5 plataformas separadas (`produ`, `brand-content`, `community`, `model-operation`, `coco`) con un solo sistema de datos relacional y secciones por entidad.
+> **Si eres Claude Code abriendo este proyecto por primera vez:**
+> 1. **Lee también `HANDOFF.md`** en la raíz del repo — tiene setup, comandos, troubleshooting, y URLs.
+> 2. **Lee `DESCUBRIMIENTOS.md`** si vas a tocar el modelo de datos o entender por qué algo está como está.
+> 3. Las convenciones de este archivo (idioma, estética, stack) son **no negociables**.
 
-## Estado actual (Fase 1 — scaffolding)
+Plataforma admin unificada del Universo FC Agency **en producción** en https://admin.fcagency.mx. Reemplaza 5 plataformas separadas previas (`produ`, `brand-content`, `community`, `model-operation`, `coco`) con un solo sistema de datos relacional.
 
-- Astro + CF Workers + D1 + auth custom con magic link
-- Layout con sidebar + 7 secciones ruteables (Dashboard, Modelos, Producciones, Briefs, Contenido, Contactos, Clientes)
-- **Modelos** funcional end-to-end: lista, alta, edit, eliminar, filtros por estado
-- Producciones, Briefs, Contenido, Contactos, Clientes son placeholders con EmptyState
-- Migración de datos desde Firebase actual — pendiente Fase 2
-- Deploy a `admin.fcagency.mx` — pendiente que Fely cree DNS y CF account
-- Las 5 plataformas viejas siguen vivas; no se tocan hasta Fase 3
+## Estado: EN PRODUCCIÓN
+
+- Astro + CF Workers + D1 + auth custom con magic link via Resend
+- 8 secciones funcionales: Dashboard, Modelos, Producciones, Castings, Briefs, Contenido, Contactos, Clientes + Pagos + Calendario + Admin
+- 370 filas migradas desde Firebase (147 modelos, 30 producciones, 73 contactos, etc.)
+- Auto-registro abierto temporal (cualquier email crea cuenta como viewer)
+- Las 4 plataformas viejas Netlify/Firebase siguen vivas en paralelo; NO tocar
 
 ## Stack (no cambiar)
 
