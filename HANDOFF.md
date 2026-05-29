@@ -262,7 +262,24 @@ Ella ya tiene Claude Code instalado (ver `handoff-fely-claude-code.md` en `claud
 
 ---
 
-## 12 — QA pasado al 2026-05-28
+## 12 — Mantener este doc vivo
+
+Este HANDOFF es la **single source of truth** del proyecto. Cuando hagas cambios estructurales (nueva sección, nuevo comando, nueva decisión de arquitectura), actualízalo y commit.
+
+**Ritual de cierre de sesión importante:**
+- Si tocaste schema → actualiza `ARQUITECTURA.md` + `PLAN.md`
+- Si decidiste algo grande con Fely → actualiza `PREGUNTAS-FELY.md`
+- Si agregaste sección/feature → actualiza la sección de estado en `CLAUDE.md` + bitácora en `PRODUCCION.md`
+- Si cambió URL/credencial/cuenta → actualiza este `HANDOFF.md` sección 10
+
+Después: `git add -A && git commit -m "docs: actualiza handoff" && git push`. La URL raw siempre apunta a la última versión.
+
+**Respaldo en Obsidian (vault de Roberto):**
+Los docs viven duplicados en `Roberto Vault/sopadeletras®/FC Agency/admin-fcagency/`. Hay un script `scripts/sync-to-vault.sh` que actualiza el vault desde el repo. Correr después de cambios grandes a docs.
+
+---
+
+## 13 — QA pasado al 2026-05-28
 
 Ruta `/` `/login` `/dashboard` `/modelos` `/producciones` `/castings` `/briefs` `/contenido` `/contactos` `/clientes` `/pagos` `/calendario` `/admin` `/admin/duplicados` `/perfil` + detail pages + forms `/nuevo` + búsquedas + exports CSV + notas timeline POST/DELETE + API search + SSL custom domain → **18+ rutas verificadas, todas 200 OK**.
 
