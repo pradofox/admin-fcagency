@@ -30,9 +30,11 @@ if (Astro.request.method === 'POST' && editable) {
     if (!nombre) { error = 'El nombre es obligatorio.'; }
     else {
       const get = (k: string) => { const v = form.get(k); return v === null || v === '' ? null : String(v).trim(); };
+      const horaAdRaw = form.get('precio_hora_adicional');
+      const horaAd = horaAdRaw === null || horaAdRaw === '' ? null : Number(horaAdRaw) || 0;
       await db
-        .prepare(`UPDATE conceptos_servicio SET nombre=?, rol=?, descripcion=?, precio_mxn=?, notas=?, updated_at=? WHERE id=?`)
-        .bind(nombre, get('rol'), get('descripcion'), precio, get('notas'), now(), id)
+        .prepare(`UPDATE conceptos_servicio SET nombre=?, rol=?, descripcion=?, precio_mxn=?, precio_hora_adicional=?, notas=?, updated_at=? WHERE id=?`)
+        .bind(nombre, get('rol'), get('descripcion'), precio, horaAd, get('notas'), now(), id)
         .run();
       msgOk = 'Concepto actualizado.';
     }
@@ -105,6 +107,9 @@ const editRepartoId = Astro.url.searchParams.get('editar');
       <h1 style="margin:0">{concepto.nombre}</h1>
       <div class="card-meta" style="margin-top:4px">
         {concepto.rol && <span class="chip">{concepto.rol}</span>}
+        {concepto.precio_hora_adicional != null && concepto.precio_hora_adicional > 0 && (
+          <span class="chip" style="color:var(--gold)">+{fmt(concepto.precio_hora_adicional)}/hr extra</span>
+        )}
         {concepto.descripcion && <span class="text-muted">{concepto.descripcion}</span>}
       </div>
     </div>
@@ -304,15 +309,22 @@ const editRepartoId = Astro.url.searchParams.get('editar');
           </div>
           <div class="col">
             <label class="label">Categoría / Rol</label>
-            <select class="select" name="rol">
+            <select class="select" name="rol" id="sel_rol_edit" onchange="toggleHoraAdEdit()">
               <option value="">— sin categoría —</option>
               {ROLES.map((r) => <option value={r} selected={concepto.rol === r}>{r}</option>)}
             </select>
           </div>
           <div class="col">
-            <label class="label">Cobro al cliente MXN</label>
+            <label class="label" id="lbl_precio_edit">Cobro al cliente MXN</label>
             <input class="input" type="number" name="precio_mxn" value={concepto.precio_mxn} min="0" step="1" />
           </div>
+        </div>
+        <div id="row_hora_ad_edit" style="display:none;background:var(--bg-3,#1a1a1a);border:1px solid var(--border);padding:12px;border-radius:4px;margin-bottom:6px">
+          <label class="label" style="margin-top:0">Precio por hora adicional MXN</label>
+          <input class="input" type="number" name="precio_hora_adicional" value={concepto.precio_hora_adicional ?? ''} min="0" step="1" placeholder="Ej. 800" style="max-width:200px" />
+          <p class="text-muted" style="font-size:11px;margin-top:6px">
+            La 1ª hora cuesta el cobro de arriba; cada hora extra suma este monto. En la cotización eliges horas y se calcula solo.
+          </p>
         </div>
         <label class="label">Descripción</label>
         <input class="input" name="descripcion" value={concepto.descripcion ?? ''} />
@@ -331,7 +343,25 @@ const editRepartoId = Astro.url.searchParams.get('editar');
   )}
 </Layout>
 
-<script define:vars={{ totalRepartido, precioTotal: concepto.precio_mxn }}>
+<script define:vars={{ totalRepartido, precioTotal: concepto.precio_mxn, rolActual: concepto.rol ?? '' }}>
+const ROLES_POR_HORA = ['Modelo'];
+function toggleHoraAdEdit() {
+  const sel = document.getElementById('sel_rol_edit');
+  const row = document.getElementById('row_hora_ad_edit');
+  const lbl = document.getElementById('lbl_precio_edit');
+  if (!sel || !row) return;
+  const esPorHora = ROLES_POR_HORA.includes(sel.value);
+  row.style.display = esPorHora ? 'block' : 'none';
+  if (lbl) lbl.textContent = esPorHora ? 'Cobro 1ª hora MXN' : 'Cobro al cliente MXN';
+}
+// Init: mostrar el campo si el concepto ya es de rol por hora
+if (ROLES_POR_HORA.includes(rolActual)) {
+  const row = document.getElementById('row_hora_ad_edit');
+  const lbl = document.getElementById('lbl_precio_edit');
+  if (row) row.style.display = 'block';
+  if (lbl) lbl.textContent = 'Cobro 1ª hora MXN';
+}
+
 function calcResto() {
   const inp   = document.getElementById('inp_monto_rep');
   const txt   = document.getElementById('txt_resto');

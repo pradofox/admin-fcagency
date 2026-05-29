@@ -27,12 +27,14 @@ if (Astro.request.method === 'POST' && editable) {
     error = 'El nombre del concepto es obligatorio.';
   } else {
     const get = (k: string) => { const v = form.get(k); return v === null || v === '' ? null : String(v).trim(); };
+    const horaAdRaw = form.get('precio_hora_adicional');
+    const horaAd = horaAdRaw === null || horaAdRaw === '' ? null : Number(horaAdRaw) || 0;
     const ts = now();
     const id = newId();
     await db
-      .prepare(`INSERT INTO conceptos_servicio (id, nombre, rol, descripcion, precio_mxn, notas, activo, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`)
-      .bind(id, nombre, get('rol'), get('descripcion'), precio, get('notas'), ts, ts)
+      .prepare(`INSERT INTO conceptos_servicio (id, nombre, rol, descripcion, precio_mxn, precio_hora_adicional, notas, activo, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
+      .bind(id, nombre, get('rol'), get('descripcion'), precio, horaAd, get('notas'), ts, ts)
       .run();
     return Astro.redirect(`/proveedores/${id}`);
   }
@@ -96,15 +98,23 @@ const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
           </div>
           <div class="col">
             <label class="label">Categoría / Rol</label>
-            <select class="select" name="rol">
+            <select class="select" name="rol" id="sel_rol_nuevo" onchange="toggleHoraAd()">
               <option value="">— seleccionar —</option>
               {ROLES.map((r) => <option value={r}>{r}</option>)}
             </select>
           </div>
           <div class="col">
-            <label class="label">Cobro al cliente MXN *</label>
+            <label class="label" id="lbl_precio_nuevo">Cobro al cliente MXN *</label>
             <input class="input" type="number" name="precio_mxn" required min="0" step="1" placeholder="0" />
           </div>
+        </div>
+        {/* Hora adicional — solo aplica a roles por hora (Modelo) */}
+        <div id="row_hora_ad" style="display:none;background:var(--bg-3,#1a1a1a);border:1px solid var(--border);padding:12px;border-radius:4px;margin-bottom:6px">
+          <label class="label" style="margin-top:0">Precio por hora adicional MXN</label>
+          <input class="input" type="number" name="precio_hora_adicional" min="0" step="1" placeholder="Ej. 800" style="max-width:200px" />
+          <p class="text-muted" style="font-size:11px;margin-top:6px">
+            La 1ª hora cuesta lo de <strong>Cobro al cliente</strong> arriba; cada hora extra suma este monto. En la cotización eliges cuántas horas y se calcula solo.
+          </p>
         </div>
         <label class="label">Descripción</label>
         <input class="input" name="descripcion" placeholder="Detalle del concepto (opcional)" />
@@ -184,3 +194,17 @@ const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
     <EmptyState title="Sin conceptos" message="Crea conceptos de servicio para usarlos en cotizaciones." />
   )}
 </Layout>
+
+<script>
+// Roles que se cobran por hora → muestran el campo de hora adicional
+const ROLES_POR_HORA = ['Modelo'];
+function toggleHoraAd() {
+  const sel = document.getElementById('sel_rol_nuevo');
+  const row = document.getElementById('row_hora_ad');
+  const lbl = document.getElementById('lbl_precio_nuevo');
+  if (!sel || !row) return;
+  const esPorHora = ROLES_POR_HORA.includes(sel.value);
+  row.style.display = esPorHora ? 'block' : 'none';
+  if (lbl) lbl.textContent = esPorHora ? 'Cobro 1ª hora MXN *' : 'Cobro al cliente MXN *';
+}
+</script>

@@ -46,7 +46,22 @@ if (Astro.request.method === 'POST' && editable) {
       const { results: reps } = await db
         .prepare('SELECT proveedor_nombre, rol, monto_mxn FROM repartos_concepto WHERE concepto_id = ?')
         .bind(conceptoId).all<any>();
-      const repartos = (reps ?? []).filter((r: any) => r.proveedor_nombre);
+      let repartos = (reps ?? []).filter((r: any) => r.proveedor_nombre);
+
+      // Tarifa por horas: 1ª hora = precio_mxn, cada hora extra suma precio_hora_adicional.
+      // El reparto a proveedores (pago al modelo) escala proporcional al cobro.
+      const precioBase = concepto.precio_mxn ?? 0;
+      const horaAd = concepto.precio_hora_adicional ?? null;
+      const horasRaw = form.get('horas');
+      const horas = horasRaw === null || horasRaw === '' ? 1 : Math.max(1, Number(horasRaw) || 1);
+      let cobroLinea = precioBase;
+      let descripcion = concepto.nombre;
+      if (horaAd != null && horaAd > 0 && horas > 1) {
+        cobroLinea = precioBase + (horas - 1) * horaAd;
+        const factor = precioBase > 0 ? cobroLinea / precioBase : 1;
+        repartos = repartos.map((r: any) => ({ ...r, monto_mxn: Math.round((r.monto_mxn ?? 0) * factor) }));
+        descripcion = `${concepto.nombre} (${horas} hrs)`;
+      }
       const pagoProv = repartos.reduce((s: number, r: any) => s + (r.monto_mxn ?? 0), 0);
       const maxOrden = await db
         .prepare('SELECT MAX(orden) as m FROM lineas_cotizacion WHERE cotizacion_id = ?')
@@ -57,7 +72,7 @@ if (Astro.request.method === 'POST' && editable) {
                     (id, cotizacion_id, descripcion, cantidad, precio_unitario, rol, proveedor_nombre, concepto_id, pago_proveedor, reparto_json, orden)
                   VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(
-          newId(), id, concepto.nombre, concepto.precio_mxn ?? 0, concepto.rol ?? null,
+          newId(), id, descripcion, cobroLinea, concepto.rol ?? null,
           repartos.map((r: any) => r.proveedor_nombre).join(', ') || null,
           conceptoId, pagoProv, JSON.stringify(repartos), orden
         )
@@ -216,7 +231,7 @@ const { results: clientes } = await db.prepare('SELECT id, nombre FROM clientes 
 // Catálogo de conceptos con su reparto (para agregar al catálogo)
 const { results: conceptosCat } = await db
   .prepare(
-    `SELECT cs.id, cs.nombre, cs.rol, cs.precio_mxn,
+    `SELECT cs.id, cs.nombre, cs.rol, cs.precio_mxn, cs.precio_hora_adicional,
             json_group_array(json_object(
               'proveedor_nombre', r.proveedor_nombre,
               'rol', r.rol,
@@ -436,6 +451,10 @@ const ESTADOS_FLUJO = [
               ))}
             </select>
           </div>
+          <div id="col_horas" style="display:none;min-width:90px">
+            <label class="label">Horas</label>
+            <input class="input" type="number" name="horas" id="inp_horas_cat" min="1" step="0.5" value="1" onchange="onProvChange()" oninput="onProvChange()" style="width:90px" />
+          </div>
           <button type="submit" class="btn btn-primary">Agregar a la cotización</button>
         </form>
 
@@ -564,21 +583,45 @@ function onProvChange() {
   const concepto = CATALOGO.find((c) => c.id === sel.value);
   const box = document.getElementById('preview_concepto');
   const cont = document.getElementById('preview_repartos');
-  if (!concepto || !box || !cont) { if (box) box.style.display = 'none'; return; }
+  const colHoras = document.getElementById('col_horas');
+  if (!concepto || !box || !cont) {
+    if (box) box.style.display = 'none';
+    if (colHoras) colHoras.style.display = 'none';
+    return;
+  }
+
+  // ¿Concepto por horas? Mostrar campo de horas y escalar.
+  const horaAd = concepto.precio_hora_adicional;
+  const porHora = horaAd != null && horaAd > 0;
+  if (colHoras) colHoras.style.display = porHora ? 'block' : 'none';
+  let horas = 1;
+  if (porHora) {
+    horas = parseFloat(document.getElementById('inp_horas_cat')?.value || '1') || 1;
+    if (horas < 1) horas = 1;
+  }
+  const precioBase = concepto.precio_mxn || 0;
+  const cobro = porHora && horas > 1 ? precioBase + (horas - 1) * horaAd : precioBase;
+  const factor = precioBase > 0 ? cobro / precioBase : 1;
 
   const repartos = concepto.repartos ?? [];
+  let sumRep = 0;
   let html = '';
   for (const r of repartos) {
+    const monto = Math.round((r.monto_mxn || 0) * factor);
+    sumRep += monto;
     html += `<div style="display:flex;justify-content:space-between;padding:2px 0">
       <span>· ${r.proveedor_nombre}${r.rol ? ` <span style="color:#888">(${r.rol})</span>` : ''}</span>
-      <span class="mono" style="color:var(--danger,#e25555)">${fmtMX(r.monto_mxn)}</span></div>`;
+      <span class="mono" style="color:var(--danger,#e25555)">${fmtMX(monto)}</span></div>`;
+  }
+  if (porHora && horas > 1) {
+    html = `<div style="color:#888;font-size:11px;margin-bottom:6px">${horas} hrs: 1ª hora ${fmtMX(precioBase)} + ${horas - 1} × ${fmtMX(horaAd)}</div>` + html;
   }
   html += `<div style="display:flex;justify-content:space-between;padding:6px 0 2px;margin-top:4px;border-top:1px solid var(--border)">
       <span style="color:var(--gold)">Utilidad FC Agency</span>
-      <span class="mono" style="color:var(--text-ok,#4ade80)">${fmtMX(concepto.margen)}</span></div>`;
+      <span class="mono" style="color:var(--text-ok,#4ade80)">${fmtMX(cobro - sumRep)}</span></div>`;
   html += `<div style="display:flex;justify-content:space-between;padding:2px 0;font-weight:600">
       <span>Cobro al cliente</span>
-      <span class="mono" style="color:var(--gold)">${fmtMX(concepto.precio_mxn)}</span></div>`;
+      <span class="mono" style="color:var(--gold)">${fmtMX(cobro)}</span></div>`;
   cont.innerHTML = html;
   box.style.display = 'block';
 }
