@@ -16,7 +16,7 @@ interface Event {
   esMia?: boolean;
 }
 
-const TIPOS = ['Tarea', 'Producción', 'Brief', 'Pieza', 'Contacto'] as const;
+const TIPOS = ['Tarea', 'Producción', 'Brief', 'Pieza', 'Contacto', 'Estudio', 'Cowork'] as const;
 type Tipo = typeof TIPOS[number];
 
 // Filtros
@@ -141,6 +141,44 @@ if (filtrosActivos.has('Contacto')) {
   })));
 }
 
+if (filtrosActivos.has('Estudio')) {
+  const estudio = await db
+    .prepare(
+      `SELECT re.id, re.fecha, re.hora_inicio, re.tipo, re.titulo,
+              mi.nombre as miembro_nombre, re.cliente_libre
+       FROM reservas_estudio re
+       LEFT JOIN miembros_district mi ON mi.id = re.miembro_id
+       WHERE re.fecha BETWEEN ? AND ? AND re.estado != 'cancelada'`
+    )
+    .bind(startStr, endStr)
+    .all<any>();
+  events.push(...(estudio.results ?? []).map((e: any) => ({
+    fecha: e.fecha,
+    tipo: 'Estudio' as const,
+    titulo: `${e.tipo} · ${e.titulo ?? e.miembro_nombre ?? e.cliente_libre ?? 'Reserva'}${e.hora_inicio ? ' ' + e.hora_inicio : ''}`,
+    href: `/district/estudio/${e.id}`
+  })));
+}
+
+if (filtrosActivos.has('Cowork')) {
+  const cowork = await db
+    .prepare(
+      `SELECT rc.id, rc.fecha, rc.hora_inicio, rc.tipo, rc.titulo,
+              mi.nombre as miembro_nombre, rc.invitado_libre
+       FROM reservas_cowork rc
+       LEFT JOIN miembros_district mi ON mi.id = rc.miembro_id
+       WHERE rc.fecha BETWEEN ? AND ?`
+    )
+    .bind(startStr, endStr)
+    .all<any>();
+  events.push(...(cowork.results ?? []).map((e: any) => ({
+    fecha: e.fecha,
+    tipo: 'Cowork' as const,
+    titulo: `${e.titulo ?? e.miembro_nombre ?? e.invitado_libre ?? e.tipo}${e.hora_inicio ? ' ' + e.hora_inicio : ''}`,
+    href: `/district/cowork/${e.id}`
+  })));
+}
+
 // Agrupar por fecha
 const byDate: Record<string, Event[]> = {};
 for (const e of events) {
@@ -197,7 +235,9 @@ const chipColor: Record<Tipo, string> = {
   'Producción': 'cal-prod',
   'Brief': 'cal-brief',
   'Pieza': 'cal-pieza',
-  'Contacto': 'cal-contacto'
+  'Contacto': 'cal-contacto',
+  'Estudio': 'cal-estudio',
+  'Cowork': 'cal-cowork'
 };
 
 const diasSemana = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
@@ -216,7 +256,15 @@ const diasSemana = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
   <div class="filters" style="margin-bottom:8px">
     {TIPOS.map((t) => (
       <a href={toggleTipoHref(t)} class={`filter-chip cal-filter ${chipColor[t]} ${filtrosActivos.has(t) ? 'active' : ''}`}>
-        {filtrosActivos.has(t) ? '●' : '○'} {t === 'Producción' ? 'Producciones' : t === 'Pieza' ? 'Piezas' : t === 'Brief' ? 'Briefs' : t === 'Tarea' ? 'Tareas' : 'Contactos'}
+        {filtrosActivos.has(t) ? '●' : '○'} {
+          t === 'Producción' ? 'Producciones' :
+          t === 'Pieza' ? 'Piezas' :
+          t === 'Brief' ? 'Briefs' :
+          t === 'Tarea' ? 'Tareas' :
+          t === 'Estudio' ? 'Estudio' :
+          t === 'Cowork' ? 'Cowork' :
+          'Contactos'
+        }
       </a>
     ))}
   </div>
@@ -319,6 +367,8 @@ const diasSemana = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
     .cal-brief { border-left-color: #6ab7ff; }
     .cal-pieza { border-left-color: #4ade80; }
     .cal-contacto { border-left-color: #a78bfa; }
+    .cal-estudio { border-left-color: #fb923c; }
+    .cal-cowork { border-left-color: #34d399; }
     .cal-more {
       font-size: 10px;
       color: var(--text-2);
@@ -329,6 +379,8 @@ const diasSemana = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
     .cal-filter.cal-brief.active { border-left: 3px solid #6ab7ff; }
     .cal-filter.cal-pieza.active { border-left: 3px solid #4ade80; }
     .cal-filter.cal-contacto.active { border-left: 3px solid #a78bfa; }
+    .cal-filter.cal-estudio.active { border-left: 3px solid #fb923c; }
+    .cal-filter.cal-cowork.active { border-left: 3px solid #34d399; }
     @media (max-width: 768px) {
       .cal-cell { min-height: 80px; padding: 4px; }
       .cal-event { font-size: 10px; }

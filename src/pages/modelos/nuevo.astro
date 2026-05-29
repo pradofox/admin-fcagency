@@ -33,8 +33,8 @@ if (Astro.request.method === 'POST') {
         `INSERT INTO modelos (
           id, nombre, email, whatsapp, instagram, cumpleanos, genero,
           estatura_cm, busto_cm, cintura_cm, cadera_cm, calzado_mx,
-          cabello, ojos, ciudad, notas, estado, created_by, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          cabello, ojos, ciudad, talentos, notas, estado, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         id,
@@ -52,6 +52,7 @@ if (Astro.request.method === 'POST') {
         get('cabello'),
         get('ojos'),
         get('ciudad'),
+        get('talentos'),
         get('notas'),
         (get('estado') as string) ?? 'activo',
         user.id,

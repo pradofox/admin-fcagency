@@ -39,7 +39,7 @@ if (Astro.request.method === 'POST' && editable) {
         `UPDATE modelos SET
           nombre = ?, email = ?, whatsapp = ?, instagram = ?, cumpleanos = ?, genero = ?,
           estatura_cm = ?, busto_cm = ?, cintura_cm = ?, cadera_cm = ?, calzado_mx = ?,
-          cabello = ?, ojos = ?, ciudad = ?, notas = ?, estado = ?, updated_at = ?
+          cabello = ?, ojos = ?, ciudad = ?, talentos = ?, notas = ?, estado = ?, updated_at = ?
         WHERE id = ?`
       )
       .bind(
@@ -57,6 +57,7 @@ if (Astro.request.method === 'POST' && editable) {
         get('cabello'),
         get('ojos'),
         get('ciudad'),
+        get('talentos'),
         get('notas'),
         get('estado') ?? 'activo',
         now(),
