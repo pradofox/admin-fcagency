@@ -36,11 +36,11 @@ if (Astro.request.method === 'POST' && editable) {
     };
     await db
       .prepare(
-        `UPDATE reservas_cowork SET fecha = ?, hora_inicio = ?, hora_fin = ?, tipo = ?,
+        `UPDATE reservas_cowork SET fecha = ?, hora_inicio = ?, hora_fin = ?, tipo = ?, espacio = ?,
                 titulo = ?, miembro_id = ?, invitado_libre = ?, capacidad = ?, notas = ?, updated_at = ?
          WHERE id = ?`
       )
-      .bind(fecha, get('hora_inicio'), get('hora_fin'), get('tipo') ?? 'visita', get('titulo'), get('miembro_id'), get('invitado_libre'), num('capacidad'), get('notas'), now(), id)
+      .bind(fecha, get('hora_inicio'), get('hora_fin'), get('tipo') ?? 'visita', get('espacio') ?? 'hot_desk', get('titulo'), get('miembro_id'), get('invitado_libre'), num('capacidad'), get('notas'), now(), id)
       .run();
     saved = true;
   }
@@ -77,7 +77,14 @@ const TIPOS_COWORK = ['visita', 'evento_comunidad', 'after_office', 'actividad_i
   <form method="POST" action={`/district/cowork/${id}`}>
     <div class="row">
       <div class="col">
-        <label class="label">Tipo</label>
+        <label class="label">Espacio</label>
+        <select class="select" name="espacio">
+          <option value="hot_desk"    selected={(r.espacio ?? 'hot_desk') === 'hot_desk'}>Hot desk</option>
+          <option value="sala_juntas" selected={r.espacio === 'sala_juntas'}>Sala de juntas</option>
+        </select>
+      </div>
+      <div class="col">
+        <label class="label">Tipo de evento</label>
         <select class="select" name="tipo">
           {TIPOS_COWORK.map((t) => (
             <option value={t} selected={r.tipo === t}>{t.replace(/_/g, ' ')}</option>
