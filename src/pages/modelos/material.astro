@@ -38,6 +38,43 @@ const filas = (modelos ?? []).map((m: any) => {
 const totalPendientes = filas.filter((f: any) => f.falta.length > 0).length;
 const hoy = new Date().toISOString().slice(0, 10);
 
+// ── Dashboard: métricas globales (independientes de la vista) ──────────────
+const stats = await db
+  .prepare(
+    `SELECT
+       COUNT(*) AS total,
+       SUM(CASE WHEN estado = 'activo' THEN 1 ELSE 0 END) AS activos,
+       SUM(CASE WHEN (polas = 0 OR polas IS NULL) THEN 1 ELSE 0 END) AS falta_polas,
+       SUM(CASE WHEN (book = 0 OR book IS NULL) THEN 1 ELSE 0 END) AS falta_book,
+       SUM(CASE WHEN (videocasting = 0 OR videocasting IS NULL) THEN 1 ELSE 0 END) AS falta_video,
+       SUM(CASE WHEN ((polas = 0 OR polas IS NULL) OR (book = 0 OR book IS NULL) OR (videocasting = 0 OR videocasting IS NULL)) THEN 1 ELSE 0 END) AS pendientes,
+       SUM(CASE WHEN (material_actualizado_en IS NULL OR material_actualizado_en < date('now','-180 days')) THEN 1 ELSE 0 END) AS stale,
+       SUM(CASE WHEN (polas = 1 AND book = 1 AND videocasting = 1) THEN 1 ELSE 0 END) AS completos
+     FROM modelos
+     WHERE estado != 'archivado'`
+  )
+  .first<any>();
+
+const conProdMes = await db
+  .prepare(
+    `SELECT COUNT(DISTINCT lp.modelo_id) AS c
+     FROM lineas_produccion lp
+     JOIN producciones p ON p.id = lp.produccion_id
+     WHERE lp.modelo_id IS NOT NULL
+       AND p.estado != 'cancelada' AND lp.estado != 'cancelado'
+       AND p.fecha_inicio IS NOT NULL
+       AND strftime('%Y-%m', p.fecha_inicio) = strftime('%Y-%m','now')`
+  )
+  .first<{ c: number }>();
+
+const total      = stats?.total ?? 0;
+const activos     = stats?.activos ?? 0;
+const pendientes = stats?.pendientes ?? 0;
+const completos  = stats?.completos ?? 0;
+const stale      = stats?.stale ?? 0;
+const pctComplet = total > 0 ? Math.round((completos / total) * 100) : 0;
+const nombreMes  = new Intl.DateTimeFormat('es-MX', { month: 'long' }).format(new Date());
+
 // Días desde última actualización
 function diasDesde(fecha: string | null): number | null {
   if (!fecha) return null;
@@ -63,7 +100,47 @@ function vistaHref(v: string) {
         <span class="text-muted">{totalPendientes} modelo{totalPendientes === 1 ? '' : 's'} con material pendiente</span>
       </div>
     </div>
-    <a href="/modelos" class="btn btn-sm">Volver</a>
+    <div style="display:flex;gap:8px">
+      <a href="/modelos/agenda" class="btn btn-sm">Agenda</a>
+      <a href="/modelos" class="btn btn-sm">Volver</a>
+    </div>
+  </div>
+
+  {/* ── Dashboard de estado de books ── */}
+  <div class="row" style="margin-bottom:14px">
+    <div class="col card" style="border-left:3px solid var(--gold)">
+      <div class="card-meta">Books completos</div>
+      <div class="card-title mono" style="color:var(--gold)">{completos}<span style="font-size:13px;opacity:.7"> / {total} ({pctComplet}%)</span></div>
+    </div>
+    <div class="col card" style={`border-left:3px solid ${pendientes > 0 ? 'var(--danger,#e25555)' : 'var(--text-ok,#4ade80)'}`}>
+      <div class="card-meta">Con material pendiente</div>
+      <div class="card-title mono" style={`color:${pendientes > 0 ? 'var(--danger,#e25555)' : 'var(--text-ok,#4ade80)'}`}>{pendientes}</div>
+    </div>
+    <div class="col card" style="border-left:3px solid #6ab7ff">
+      <div class="card-meta">Activos con producción en {nombreMes}</div>
+      <div class="card-title mono" style="color:#6ab7ff">{conProdMes?.c ?? 0}<span style="font-size:13px;opacity:.7"> / {activos} activos</span></div>
+    </div>
+    <div class="col card" style={`border-left:3px solid ${stale > 0 ? 'var(--danger,#e25555)' : 'var(--border)'}`}>
+      <div class="card-meta">Sin actualizar +180 días</div>
+      <div class="card-title mono" style={`color:${stale > 0 ? 'var(--danger,#e25555)' : 'inherit'}`}>{stale}</div>
+    </div>
+  </div>
+
+  {/* ── Desglose: qué tipo de material falta ── */}
+  <div class="card" style="margin-bottom:24px;display:flex;gap:28px;flex-wrap:wrap;align-items:center;padding:14px 18px">
+    <span class="card-meta" style="margin:0">Qué falta (total modelos):</span>
+    <span style="display:flex;align-items:center;gap:6px">
+      <span class="chip" style="color:var(--danger,#e25555)">Polas</span>
+      <span class="mono" style="font-weight:600">{stats?.falta_polas ?? 0}</span>
+    </span>
+    <span style="display:flex;align-items:center;gap:6px">
+      <span class="chip" style="color:var(--danger,#e25555)">Book</span>
+      <span class="mono" style="font-weight:600">{stats?.falta_book ?? 0}</span>
+    </span>
+    <span style="display:flex;align-items:center;gap:6px">
+      <span class="chip" style="color:var(--danger,#e25555)">Videocasting</span>
+      <span class="mono" style="font-weight:600">{stats?.falta_video ?? 0}</span>
+    </span>
   </div>
 
   <div class="filters" style="margin-bottom:20px">
