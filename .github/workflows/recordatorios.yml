@@ -1,0 +1,23 @@
+name: Recordatorios diarios
+
+# Llama al endpoint de recordatorios de admin-fcagency una vez al día.
+# Envía:
+#  - Convocatoria/recordatorio de producciones del día siguiente (modelos + proveedores)
+#  - Digest de cumpleaños de modelos a los admins (cuando faltan 7, 1 o 0 días)
+#
+# El endpoint está protegido por CRON_SECRET (secret de Cloudflare + secret de GitHub).
+
+on:
+  schedule:
+    # 15:00 UTC = 09:00 AM hora CDMX (UTC-6, sin horario de verano).
+    - cron: "0 15 * * *"
+  workflow_dispatch: {} # permite dispararlo a mano desde la pestaña Actions
+
+jobs:
+  recordatorios:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Llamar endpoint de recordatorios
+        run: |
+          curl -fsS --retry 3 --retry-delay 10 \
+            "https://admin.fcagency.mx/api/cron/recordatorios?key=${{ secrets.CRON_SECRET }}"
