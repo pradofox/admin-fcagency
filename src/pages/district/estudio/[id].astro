@@ -1,0 +1,181 @@
+---
+import Layout from '../../../components/Layout.astro';
+import DistrictNav from '../../../components/DistrictNav.astro';
+import { requireUser, canEdit } from '../../../lib/session';
+import { getDB, now } from '../../../lib/db';
+import { formatFecha } from '../../../lib/fechas';
+
+const user = requireUser(Astro);
+const editable = canEdit(user);
+const db = getDB(Astro);
+const { id } = Astro.params;
+
+let saved = false;
+let error: string | null = null;
+
+if (Astro.request.method === 'POST' && editable) {
+  const form = await Astro.request.formData();
+  const method = form.get('_method');
+  const action = form.get('_action');
+
+  if (method === 'DELETE') {
+    await db.prepare('DELETE FROM reservas_estudio WHERE id = ?').bind(id).run();
+    return Astro.redirect('/district/estudio');
+  }
+  if (action === 'toggle_pagado') {
+    const current = form.get('current') === '1' ? 0 : 1;
+    await db.prepare('UPDATE reservas_estudio SET pagado = ?, updated_at = ? WHERE id = ?').bind(current, now(), id).run();
+    return Astro.redirect(`/district/estudio/${id}`);
+  }
+  if (action === 'cancelar') {
+    await db.prepare("UPDATE reservas_estudio SET estado = 'cancelada', updated_at = ? WHERE id = ?").bind(now(), id).run();
+    return Astro.redirect(`/district/estudio/${id}`);
+  }
+  if (action === 'reactivar') {
+    await db.prepare("UPDATE reservas_estudio SET estado = 'confirmada', updated_at = ? WHERE id = ?").bind(now(), id).run();
+    return Astro.redirect(`/district/estudio/${id}`);
+  }
+
+  const fecha = (form.get('fecha') as string)?.trim();
+  if (!fecha) {
+    error = 'Fecha obligatoria.';
+  } else {
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+    const num = (k: string) => {
+      const v = form.get(k);
+      if (v === null || v === '') return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    await db
+      .prepare(
+        `UPDATE reservas_estudio SET fecha = ?, hora_inicio = ?, hora_fin = ?, tipo = ?,
+                miembro_id = ?, cliente_libre = ?, contacto_whatsapp = ?, precio_mxn = ?, notas = ?, updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(fecha, get('hora_inicio'), get('hora_fin'), get('tipo') ?? 'foto', get('miembro_id'), get('cliente_libre'), get('contacto_whatsapp'), num('precio_mxn'), get('notas'), now(), id)
+      .run();
+    saved = true;
+  }
+}
+
+const r = await db.prepare('SELECT * FROM reservas_estudio WHERE id = ?').bind(id).first<any>();
+if (!r) return Astro.redirect('/district/estudio');
+
+const { results: miembros } = await db
+  .prepare("SELECT id, nombre FROM miembros_district WHERE activo = 1 ORDER BY nombre")
+  .all<{ id: string; nombre: string }>();
+---
+
+<Layout title="Reserva estudio" pageTitle="District Studio">
+  <div class="page-head">
+    <h1>Reserva estudio</h1>
+    <div style="display:flex;gap:8px">
+      <a href="/district/estudio" class="btn btn-sm">Volver</a>
+      {editable && r.estado !== 'cancelada' && (
+        <form method="POST" action={`/district/estudio/${id}`} onsubmit="return confirm('¿Cancelar reserva?')" style="display:inline">
+          <input type="hidden" name="_action" value="cancelar" />
+          <button type="submit" class="btn btn-sm">Cancelar reserva</button>
+        </form>
+      )}
+      {editable && r.estado === 'cancelada' && (
+        <form method="POST" action={`/district/estudio/${id}`} style="display:inline">
+          <input type="hidden" name="_action" value="reactivar" />
+          <button type="submit" class="btn btn-sm">Reactivar</button>
+        </form>
+      )}
+      {editable && (
+        <form method="POST" action={`/district/estudio/${id}`} onsubmit="return confirm('¿Eliminar?')" style="display:inline">
+          <input type="hidden" name="_method" value="DELETE" />
+          <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
+        </form>
+      )}
+    </div>
+  </div>
+  <DistrictNav />
+
+  {saved && <p class="text-ok" style="margin-bottom:16px">Guardado.</p>}
+  {error && <p class="text-danger" style="margin-bottom:16px">{error}</p>}
+
+  <div class="row" style="margin-bottom:24px">
+    <div class="col card">
+      <div class="card-meta">Fecha</div>
+      <div class="card-title mono">{formatFecha(r.fecha)}</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Horario</div>
+      <div class="card-title mono">{r.hora_inicio} - {r.hora_fin}</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Tipo</div>
+      <div class="card-title">{r.tipo}</div>
+    </div>
+    {r.precio_mxn && (
+      <div class="col card">
+        <div class="card-meta">Pago</div>
+        <form method="POST" action={`/district/estudio/${id}`} style="margin-top:6px">
+          <input type="hidden" name="_action" value="toggle_pagado" />
+          <input type="hidden" name="current" value={r.pagado ? '1' : '0'} />
+          <button type="submit" class={`chip ${r.pagado ? 'chip-ok' : 'chip-warning'}`} style="border:0;cursor:pointer;font-family:var(--font-mono)" disabled={!editable}>
+            ${Math.round(r.precio_mxn).toLocaleString('es-MX')} · {r.pagado ? 'pagado' : 'por pagar'}
+          </button>
+        </form>
+      </div>
+    )}
+  </div>
+
+  <h2>Detalles</h2>
+  <form method="POST" action={`/district/estudio/${id}`}>
+    <div class="row">
+      <div class="col">
+        <label class="label">Fecha</label>
+        <input class="input" type="date" name="fecha" value={r.fecha} required />
+      </div>
+      <div class="col">
+        <label class="label">Hora inicio</label>
+        <input class="input" type="time" name="hora_inicio" value={r.hora_inicio} />
+      </div>
+      <div class="col">
+        <label class="label">Hora fin</label>
+        <input class="input" type="time" name="hora_fin" value={r.hora_fin} />
+      </div>
+      <div class="col">
+        <label class="label">Tipo</label>
+        <select class="select" name="tipo">
+          {['foto', 'video', 'ambos'].map((t) => (
+            <option value={t} selected={r.tipo === t}>{t}</option>
+          ))}
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <label class="label">Miembro</label>
+        <select class="select" name="miembro_id">
+          <option value="">— sin asignar —</option>
+          {miembros?.map((m) => (
+            <option value={m.id} selected={r.miembro_id === m.id}>{m.nombre}</option>
+          ))}
+        </select>
+      </div>
+      <div class="col">
+        <label class="label">Cliente libre</label>
+        <input class="input" name="cliente_libre" value={r.cliente_libre ?? ''} />
+      </div>
+      <div class="col">
+        <label class="label">WhatsApp</label>
+        <input class="input" name="contacto_whatsapp" value={r.contacto_whatsapp ?? ''} />
+      </div>
+      <div class="col">
+        <label class="label">Precio MXN</label>
+        <input class="input" type="number" step="0.01" name="precio_mxn" value={r.precio_mxn ?? ''} />
+      </div>
+    </div>
+    <label class="label">Notas</label>
+    <textarea class="textarea" name="notas">{r.notas ?? ''}</textarea>
+    {editable && <div class="form-actions"><button type="submit" class="btn btn-primary">Guardar cambios</button></div>}
+  </form>
+</Layout>

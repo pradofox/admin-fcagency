@@ -1,0 +1,129 @@
+---
+import Layout from '../../../components/Layout.astro';
+import DistrictNav from '../../../components/DistrictNav.astro';
+import { requireUser, canEdit } from '../../../lib/session';
+import { getDB, now } from '../../../lib/db';
+import { formatFecha } from '../../../lib/fechas';
+
+const user = requireUser(Astro);
+const editable = canEdit(user);
+const db = getDB(Astro);
+const { id } = Astro.params;
+
+let saved = false;
+let error: string | null = null;
+
+if (Astro.request.method === 'POST' && editable) {
+  const form = await Astro.request.formData();
+  const method = form.get('_method');
+  if (method === 'DELETE') {
+    await db.prepare('DELETE FROM reservas_cowork WHERE id = ?').bind(id).run();
+    return Astro.redirect('/district/cowork');
+  }
+  const fecha = (form.get('fecha') as string)?.trim();
+  if (!fecha) {
+    error = 'Fecha obligatoria.';
+  } else {
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+    const num = (k: string) => {
+      const v = form.get(k);
+      if (v === null || v === '') return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    await db
+      .prepare(
+        `UPDATE reservas_cowork SET fecha = ?, hora_inicio = ?, hora_fin = ?, tipo = ?,
+                titulo = ?, miembro_id = ?, invitado_libre = ?, capacidad = ?, notas = ?, updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(fecha, get('hora_inicio'), get('hora_fin'), get('tipo') ?? 'visita', get('titulo'), get('miembro_id'), get('invitado_libre'), num('capacidad'), get('notas'), now(), id)
+      .run();
+    saved = true;
+  }
+}
+
+const r = await db.prepare('SELECT * FROM reservas_cowork WHERE id = ?').bind(id).first<any>();
+if (!r) return Astro.redirect('/district/cowork');
+
+const { results: miembros } = await db
+  .prepare("SELECT id, nombre FROM miembros_district WHERE activo = 1 ORDER BY nombre")
+  .all<{ id: string; nombre: string }>();
+
+const TIPOS_COWORK = ['visita', 'evento_comunidad', 'after_office', 'actividad_interna', 'club'];
+---
+
+<Layout title={r.titulo ?? 'Reserva cowork'} pageTitle="District Studio">
+  <div class="page-head">
+    <h1>{r.titulo ?? 'Reserva cowork'}</h1>
+    <div style="display:flex;gap:8px">
+      <a href="/district/cowork" class="btn btn-sm">Volver</a>
+      {editable && (
+        <form method="POST" action={`/district/cowork/${id}`} onsubmit="return confirm('¿Eliminar?')" style="display:inline">
+          <input type="hidden" name="_method" value="DELETE" />
+          <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
+        </form>
+      )}
+    </div>
+  </div>
+  <DistrictNav />
+
+  {saved && <p class="text-ok" style="margin-bottom:16px">Guardado.</p>}
+  {error && <p class="text-danger" style="margin-bottom:16px">{error}</p>}
+
+  <form method="POST" action={`/district/cowork/${id}`}>
+    <div class="row">
+      <div class="col">
+        <label class="label">Tipo</label>
+        <select class="select" name="tipo">
+          {TIPOS_COWORK.map((t) => (
+            <option value={t} selected={r.tipo === t}>{t.replace(/_/g, ' ')}</option>
+          ))}
+        </select>
+      </div>
+      <div class="col">
+        <label class="label">Fecha</label>
+        <input class="input" type="date" name="fecha" value={r.fecha} required />
+      </div>
+      <div class="col">
+        <label class="label">Hora inicio</label>
+        <input class="input" type="time" name="hora_inicio" value={r.hora_inicio ?? ''} />
+      </div>
+      <div class="col">
+        <label class="label">Hora fin</label>
+        <input class="input" type="time" name="hora_fin" value={r.hora_fin ?? ''} />
+      </div>
+    </div>
+
+    <label class="label">Título / nombre del evento</label>
+    <input class="input" name="titulo" value={r.titulo ?? ''} />
+
+    <div class="row">
+      <div class="col">
+        <label class="label">Miembro</label>
+        <select class="select" name="miembro_id">
+          <option value="">— sin asignar —</option>
+          {miembros?.map((m) => (
+            <option value={m.id} selected={r.miembro_id === m.id}>{m.nombre}</option>
+          ))}
+        </select>
+      </div>
+      <div class="col">
+        <label class="label">Invitado libre</label>
+        <input class="input" name="invitado_libre" value={r.invitado_libre ?? ''} />
+      </div>
+      <div class="col">
+        <label class="label">Capacidad</label>
+        <input class="input" type="number" name="capacidad" value={r.capacidad ?? ''} />
+      </div>
+    </div>
+
+    <label class="label">Notas</label>
+    <textarea class="textarea" name="notas">{r.notas ?? ''}</textarea>
+
+    {editable && <div class="form-actions"><button type="submit" class="btn btn-primary">Guardar cambios</button></div>}
+  </form>
+</Layout>

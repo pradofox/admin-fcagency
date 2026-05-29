@@ -1,0 +1,206 @@
+---
+import Layout from '../../../components/Layout.astro';
+import DistrictNav from '../../../components/DistrictNav.astro';
+import EmptyState from '../../../components/EmptyState.astro';
+import { requireUser, canEdit } from '../../../lib/session';
+import { getDB, now } from '../../../lib/db';
+import { newId } from '../../../lib/ids';
+import { formatFecha } from '../../../lib/fechas';
+
+const user = requireUser(Astro);
+const editable = canEdit(user);
+const db = getDB(Astro);
+
+let error: string | null = null;
+
+if (Astro.request.method === 'POST' && editable) {
+  const form = await Astro.request.formData();
+  const fecha = (form.get('fecha') as string)?.trim();
+  const horaInicio = (form.get('hora_inicio') as string)?.trim();
+  const horaFin = (form.get('hora_fin') as string)?.trim();
+  if (!fecha || !horaInicio || !horaFin) {
+    error = 'Fecha, hora inicio y hora fin son obligatorios.';
+  } else {
+    // Verificar conflictos
+    const conflict = await db
+      .prepare(
+        `SELECT id FROM reservas_estudio
+         WHERE fecha = ? AND estado != 'cancelada' AND tipo = ?
+           AND ((hora_inicio < ? AND hora_fin > ?) OR (hora_inicio < ? AND hora_fin > ?) OR (hora_inicio >= ? AND hora_inicio < ?))
+         LIMIT 1`
+      )
+      .bind(fecha, form.get('tipo') ?? 'foto', horaFin, horaFin, horaInicio, horaInicio, horaInicio, horaFin)
+      .first<any>();
+    if (conflict) {
+      error = 'Ya hay una reserva en ese horario para el mismo tipo de estudio.';
+    } else {
+      const get = (k: string) => {
+        const v = form.get(k);
+        return v === null || v === '' ? null : String(v).trim();
+      };
+      const num = (k: string) => {
+        const v = form.get(k);
+        if (v === null || v === '') return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      };
+      const id = newId();
+      const ts = now();
+      await db
+        .prepare(
+          `INSERT INTO reservas_estudio (
+            id, fecha, hora_inicio, hora_fin, tipo, miembro_id, cliente_libre, contacto_whatsapp,
+            estado, precio_mxn, pagado, notas, created_by, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmada', ?, 0, ?, ?, ?, ?)`
+        )
+        .bind(id, fecha, horaInicio, horaFin, get('tipo') ?? 'foto', get('miembro_id'), get('cliente_libre'), get('contacto_whatsapp'), num('precio_mxn'), get('notas'), user.id, ts, ts)
+        .run();
+      return Astro.redirect(`/district/estudio/${id}`);
+    }
+  }
+}
+
+const filtro = Astro.url.searchParams.get('filtro') ?? 'proximas';
+const tipo = Astro.url.searchParams.get('tipo') ?? '';
+const todayISO = new Date().toISOString().slice(0, 10);
+
+const where: string[] = [];
+const binds: any[] = [];
+if (filtro === 'proximas') {
+  where.push('r.fecha >= ?');
+  binds.push(todayISO);
+}
+if (filtro === 'pasadas') {
+  where.push('r.fecha < ?');
+  binds.push(todayISO);
+}
+if (filtro === 'sin_pagar') {
+  where.push("r.pagado = 0 AND r.estado != 'cancelada'");
+}
+if (tipo) {
+  where.push('r.tipo = ?');
+  binds.push(tipo);
+}
+
+const sql = `SELECT r.id, r.fecha, r.hora_inicio, r.hora_fin, r.tipo, r.cliente_libre, r.estado, r.precio_mxn, r.pagado,
+                    mi.nombre as miembro_nombre
+             FROM reservas_estudio r
+             LEFT JOIN miembros_district mi ON mi.id = r.miembro_id
+             ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+             ORDER BY r.fecha ${filtro === 'pasadas' ? 'DESC' : 'ASC'}, r.hora_inicio ASC
+             LIMIT 200`;
+
+const { results: reservas } = await db.prepare(sql).bind(...binds).all<any>();
+
+const { results: miembros } = await db
+  .prepare("SELECT id, nombre FROM miembros_district WHERE activo = 1 ORDER BY nombre")
+  .all<{ id: string; nombre: string }>();
+---
+
+<Layout title="Estudio foto/video" pageTitle="District Studio">
+  <div class="page-head">
+    <h1>Estudio foto/video</h1>
+  </div>
+  <DistrictNav />
+
+  {error && <p class="text-danger" style="margin-bottom:16px">{error}</p>}
+
+  {editable && (
+    <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:24px" open={!!error}>
+      <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Nueva reserva</summary>
+      <form method="POST" action="/district/estudio" style="margin-top:16px">
+        <div class="row">
+          <div class="col">
+            <label class="label">Fecha *</label>
+            <input class="input" type="date" name="fecha" required value={todayISO} />
+          </div>
+          <div class="col">
+            <label class="label">Hora inicio *</label>
+            <input class="input" type="time" name="hora_inicio" required />
+          </div>
+          <div class="col">
+            <label class="label">Hora fin *</label>
+            <input class="input" type="time" name="hora_fin" required />
+          </div>
+          <div class="col">
+            <label class="label">Tipo</label>
+            <select class="select" name="tipo">
+              <option value="foto">Foto</option>
+              <option value="video">Video</option>
+              <option value="ambos">Ambos</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <label class="label">Miembro</label>
+            <select class="select" name="miembro_id">
+              <option value="">— sin asignar —</option>
+              {miembros?.map((m) => <option value={m.id}>{m.nombre}</option>)}
+            </select>
+          </div>
+          <div class="col">
+            <label class="label">O cliente libre</label>
+            <input class="input" name="cliente_libre" placeholder="Si no es miembro" />
+          </div>
+          <div class="col">
+            <label class="label">WhatsApp contacto</label>
+            <input class="input" name="contacto_whatsapp" />
+          </div>
+          <div class="col">
+            <label class="label">Precio MXN</label>
+            <input class="input" type="number" step="0.01" name="precio_mxn" />
+          </div>
+        </div>
+        <label class="label">Notas</label>
+        <textarea class="textarea" name="notas"></textarea>
+        <button type="submit" class="btn btn-primary" style="margin-top:14px">Crear reserva</button>
+      </form>
+    </details>
+  )}
+
+  <div class="filters" style="margin-bottom:8px">
+    {[
+      { v: 'proximas', label: 'próximas' },
+      { v: 'pasadas', label: 'pasadas' },
+      { v: 'sin_pagar', label: 'sin pagar' },
+      { v: 'todas', label: 'todas' }
+    ].map((f) => (
+      <a href={`/district/estudio?filtro=${f.v}${tipo ? '&tipo=' + tipo : ''}`} class={`filter-chip ${filtro === f.v ? 'active' : ''}`}>{f.label}</a>
+    ))}
+  </div>
+
+  <div class="filters" style="margin-bottom:24px">
+    {[
+      { v: '', label: 'todos los tipos' },
+      { v: 'foto', label: 'foto' },
+      { v: 'video', label: 'video' },
+      { v: 'ambos', label: 'ambos' }
+    ].map((t) => (
+      <a href={`/district/estudio?filtro=${filtro}${t.v ? '&tipo=' + t.v : ''}`} class={`filter-chip ${tipo === t.v ? 'active' : ''}`}>{t.label}</a>
+    ))}
+  </div>
+
+  {reservas && reservas.length > 0 ? (
+    <div>
+      {reservas.map((r: any) => (
+        <a href={`/district/estudio/${r.id}`} class="card" style={`display:block;color:inherit;text-decoration:none;margin-bottom:8px;${r.estado === 'cancelada' ? 'opacity:.4' : ''}`}>
+          <div style="display:flex;justify-content:space-between;gap:14px;align-items:center">
+            <div style="flex:1;min-width:0">
+              <div style="font-weight:500">{r.miembro_nombre ?? r.cliente_libre ?? '—'}</div>
+              <div class="card-meta" style="margin-top:4px">
+                <span class="chip">{r.tipo}</span>
+                <span class="mono">{formatFecha(r.fecha)} {r.hora_inicio}-{r.hora_fin}</span>
+                {r.precio_mxn && <span class="text-gold mono">${Math.round(r.precio_mxn).toLocaleString('es-MX')}</span>}
+                {r.precio_mxn && <span class={`chip ${r.pagado ? 'chip-ok' : 'chip-warning'}`}>{r.pagado ? 'pagado' : 'por pagar'}</span>}
+                {r.estado === 'cancelada' && <span class="chip chip-danger">cancelada</span>}
+              </div>
+            </div>
+          </div>
+        </a>
+      ))}
+    </div>
+  ) : (
+    <EmptyState title="Sin reservas" message="No hay reservas con estos filtros." />
+  )}
+</Layout>

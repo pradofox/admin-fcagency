@@ -1,0 +1,174 @@
+---
+import Layout from '../../components/Layout.astro';
+import DistrictNav from '../../components/DistrictNav.astro';
+import EmptyState from '../../components/EmptyState.astro';
+import { requireUser, canEdit } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
+
+const user = requireUser(Astro);
+const editable = canEdit(user);
+const db = getDB(Astro);
+
+let error: string | null = null;
+
+if (Astro.request.method === 'POST' && editable) {
+  const form = await Astro.request.formData();
+  const action = form.get('_action');
+  if (action === 'delete') {
+    await db.prepare('DELETE FROM planes_district WHERE id = ?').bind(form.get('id')).run();
+    return Astro.redirect('/district/planes');
+  }
+  if (action === 'toggle') {
+    const id = form.get('id') as string;
+    const current = form.get('current') === '1' ? 0 : 1;
+    await db.prepare('UPDATE planes_district SET activo = ? WHERE id = ?').bind(current, id).run();
+    return Astro.redirect('/district/planes');
+  }
+  const nombre = (form.get('nombre') as string)?.trim();
+  if (!nombre) {
+    error = 'Nombre del plan es obligatorio.';
+  } else {
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+    const num = (k: string, def = 0) => {
+      const v = form.get(k);
+      const n = v === null || v === '' ? def : Number(v);
+      return Number.isFinite(n) ? n : def;
+    };
+    await db
+      .prepare(
+        `INSERT INTO planes_district (
+          id, nombre, tipo, precio_mxn, duracion_dias, descripcion,
+          incluye_estudio_horas, incluye_cowork, incluye_club, activo, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`
+      )
+      .bind(
+        newId(),
+        nombre,
+        get('tipo') ?? 'cowork',
+        num('precio_mxn'),
+        num('duracion_dias', 30),
+        get('descripcion'),
+        num('incluye_estudio_horas'),
+        form.get('incluye_cowork') ? 1 : 0,
+        form.get('incluye_club') ? 1 : 0,
+        now()
+      )
+      .run();
+    return Astro.redirect('/district/planes');
+  }
+}
+
+const { results: planes } = await db
+  .prepare(
+    `SELECT p.*,
+            (SELECT COUNT(*) FROM membresias_district m WHERE m.plan_id = p.id AND m.estado = 'activa') as suscritos
+     FROM planes_district p
+     ORDER BY p.activo DESC, p.tipo, p.precio_mxn`
+  )
+  .all<any>();
+
+const TIPOS = ['cowork', 'estudio', 'club', 'mixto', 'day_pass'];
+---
+
+<Layout title="District — Planes" pageTitle="District Studio">
+  <div class="page-head">
+    <h1>Planes</h1>
+  </div>
+  <DistrictNav />
+
+  {error && <p class="text-danger">{error}</p>}
+
+  {editable && (
+    <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:32px">
+      <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Nuevo plan</summary>
+      <form method="POST" action="/district/planes" style="margin-top:16px">
+        <label class="label">Nombre del plan *</label>
+        <input class="input" name="nombre" required placeholder="Ej. Cowork mensual" />
+
+        <div class="row">
+          <div class="col">
+            <label class="label">Tipo</label>
+            <select class="select" name="tipo">
+              {TIPOS.map((t) => <option value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div class="col">
+            <label class="label">Precio MXN</label>
+            <input class="input" type="number" step="0.01" name="precio_mxn" />
+          </div>
+          <div class="col">
+            <label class="label">Duración (días)</label>
+            <input class="input" type="number" name="duracion_dias" value="30" />
+          </div>
+          <div class="col">
+            <label class="label">Horas estudio incluidas</label>
+            <input class="input" type="number" name="incluye_estudio_horas" value="0" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col">
+            <label class="label" style="display:flex;gap:6px;align-items:center">
+              <input type="checkbox" name="incluye_cowork" /> Incluye cowork
+            </label>
+          </div>
+          <div class="col">
+            <label class="label" style="display:flex;gap:6px;align-items:center">
+              <input type="checkbox" name="incluye_club" /> Incluye club
+            </label>
+          </div>
+        </div>
+
+        <label class="label">Descripción</label>
+        <textarea class="textarea" name="descripcion" placeholder="Qué incluye, restricciones, etc."></textarea>
+
+        <button type="submit" class="btn btn-primary" style="margin-top:16px">Crear plan</button>
+      </form>
+    </details>
+  )}
+
+  {planes && planes.length > 0 ? (
+    <div class="grid">
+      {planes.map((p: any) => (
+        <article class="card" style={p.activo ? '' : 'opacity:.5'}>
+          <div class="card-title">{p.nombre}</div>
+          <div class="card-meta">
+            <span class="chip">{p.tipo}</span>
+            <span class="text-gold mono">${Math.round(p.precio_mxn).toLocaleString('es-MX')}</span>
+            <span class="text-muted">/ {p.duracion_dias} días</span>
+          </div>
+          {p.descripcion && <p class="text-muted" style="font-size:13px;margin-top:8px">{p.descripcion}</p>}
+          <div class="card-meta" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+            {p.incluye_estudio_horas > 0 && <span class="chip">📷 {p.incluye_estudio_horas}h estudio</span>}
+            {p.incluye_cowork ? <span class="chip">✓ cowork</span> : null}
+            {p.incluye_club ? <span class="chip">✓ club</span> : null}
+            <span style="margin-left:auto;font-size:12px"><strong>{p.suscritos}</strong> <span class="text-muted">activos</span></span>
+          </div>
+          {editable && (
+            <div style="margin-top:12px;display:flex;gap:6px">
+              <form method="POST" action="/district/planes" style="display:inline">
+                <input type="hidden" name="_action" value="toggle" />
+                <input type="hidden" name="id" value={p.id} />
+                <input type="hidden" name="current" value={p.activo ? '1' : '0'} />
+                <button type="submit" class="btn btn-sm">{p.activo ? 'Desactivar' : 'Activar'}</button>
+              </form>
+              {p.suscritos === 0 && (
+                <form method="POST" action="/district/planes" style="display:inline" onsubmit="return confirm('¿Eliminar este plan?')">
+                  <input type="hidden" name="_action" value="delete" />
+                  <input type="hidden" name="id" value={p.id} />
+                  <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
+                </form>
+              )}
+            </div>
+          )}
+        </article>
+      ))}
+    </div>
+  ) : (
+    <EmptyState title="Sin planes" message="Crea el primer plan arriba para empezar a dar de alta miembros." />
+  )}
+</Layout>

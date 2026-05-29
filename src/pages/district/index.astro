@@ -1,0 +1,149 @@
+---
+import Layout from '../../components/Layout.astro';
+import DistrictNav from '../../components/DistrictNav.astro';
+import { requireUser } from '../../lib/session';
+import { getDB } from '../../lib/db';
+import { formatFecha } from '../../lib/fechas';
+
+requireUser(Astro);
+const db = getDB(Astro);
+
+async function count(sql: string, ...params: any[]): Promise<number> {
+  const stmt = params.length ? db.prepare(sql).bind(...params) : db.prepare(sql);
+  const row = await stmt.first<{ c: number }>();
+  return row?.c ?? 0;
+}
+
+const todayISO = new Date().toISOString().slice(0, 10);
+const in7 = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+
+const [miembrosActivos, miembrosTotal, planesActivos, membresiasActivas, pagosVencidos, pagosProximos, reservasEstudioSemana, reservasCoworkSemana, itemsInventario, itemsPrestados] = await Promise.all([
+  count('SELECT COUNT(*) as c FROM miembros_district WHERE activo = 1'),
+  count('SELECT COUNT(*) as c FROM miembros_district'),
+  count('SELECT COUNT(*) as c FROM planes_district WHERE activo = 1'),
+  count("SELECT COUNT(*) as c FROM membresias_district WHERE estado = 'activa'"),
+  count("SELECT COUNT(*) as c FROM membresias_district WHERE estado = 'activa' AND fecha_proximo_pago < ?", todayISO),
+  count("SELECT COUNT(*) as c FROM membresias_district WHERE estado = 'activa' AND fecha_proximo_pago BETWEEN ? AND ?", todayISO, in7),
+  count('SELECT COUNT(*) as c FROM reservas_estudio WHERE fecha BETWEEN ? AND ?', todayISO, in7),
+  count('SELECT COUNT(*) as c FROM reservas_cowork WHERE fecha BETWEEN ? AND ?', todayISO, in7),
+  count('SELECT COUNT(*) as c FROM inventario_district'),
+  count("SELECT COUNT(*) as c FROM inventario_district WHERE estado = 'prestado'")
+]);
+
+const { results: pagosProx } = await db
+  .prepare(
+    `SELECT m.id, m.fecha_proximo_pago, mi.nombre, p.nombre as plan_nombre, p.precio_mxn
+     FROM membresias_district m
+     JOIN miembros_district mi ON mi.id = m.miembro_id
+     JOIN planes_district p ON p.id = m.plan_id
+     WHERE m.estado = 'activa' AND m.fecha_proximo_pago <= ?
+     ORDER BY m.fecha_proximo_pago ASC LIMIT 10`
+  )
+  .bind(in7)
+  .all<any>();
+
+const { results: proximasReservas } = await db
+  .prepare(
+    `SELECT r.id, r.fecha, r.hora_inicio, r.hora_fin, r.tipo, r.cliente_libre,
+            mi.nombre as miembro_nombre, 'estudio' as kind
+     FROM reservas_estudio r
+     LEFT JOIN miembros_district mi ON mi.id = r.miembro_id
+     WHERE r.fecha >= ? AND r.estado != 'cancelada'
+     ORDER BY r.fecha, r.hora_inicio LIMIT 10`
+  )
+  .bind(todayISO)
+  .all<any>();
+---
+
+<Layout title="District Studio" pageTitle="District Studio">
+  <div class="page-head">
+    <h1>District Studio</h1>
+  </div>
+  <DistrictNav />
+
+  <h2>Resumen</h2>
+  <div class="grid-dense" style="margin-bottom:28px">
+    <a href="/district/miembros" class="stat" style="display:block;color:inherit">
+      <div class="stat-value">{miembrosActivos}</div>
+      <div class="stat-label">Miembros activos</div>
+    </a>
+    <a href="/district/miembros" class="stat stat-gold" style="display:block;color:inherit">
+      <div class="stat-value">{membresiasActivas}</div>
+      <div class="stat-label">Membresías vigentes</div>
+    </a>
+    <a href="/district/planes" class="stat" style="display:block;color:inherit">
+      <div class="stat-value">{planesActivos}</div>
+      <div class="stat-label">Planes en catálogo</div>
+    </a>
+    <a href="/district/estudio" class="stat" style="display:block;color:inherit">
+      <div class="stat-value">{reservasEstudioSemana}</div>
+      <div class="stat-label">Reservas estudio (7d)</div>
+    </a>
+    <a href="/district/cowork" class="stat" style="display:block;color:inherit">
+      <div class="stat-value">{reservasCoworkSemana}</div>
+      <div class="stat-label">Reservas cowork (7d)</div>
+    </a>
+    <a href="/district/inventario" class="stat" style="display:block;color:inherit">
+      <div class="stat-value">{itemsInventario}</div>
+      <div class="stat-label">Items en inventario</div>
+    </a>
+  </div>
+
+  <h2>Atención requerida</h2>
+  <div class="grid-dense" style="margin-bottom:28px">
+    <a href="/district/miembros?filtro=vencidos" class="stat stat-warning" style="display:block;color:inherit">
+      <div class="stat-value">{pagosVencidos}</div>
+      <div class="stat-label">Pagos vencidos</div>
+    </a>
+    <a href="/district/miembros?filtro=proximos" class="stat" style="display:block;color:inherit">
+      <div class="stat-value">{pagosProximos}</div>
+      <div class="stat-label">Pagos próximos (7d)</div>
+    </a>
+    <a href="/district/inventario?filtro=prestados" class="stat" style="display:block;color:inherit">
+      <div class="stat-value">{itemsPrestados}</div>
+      <div class="stat-label">Items prestados</div>
+    </a>
+  </div>
+
+  <div class="row" style="align-items:flex-start;gap:20px;margin-bottom:36px">
+    <div class="col">
+      <h2 style="margin-bottom:14px">Pagos por cobrar</h2>
+      {pagosProx && pagosProx.length > 0 ? (
+        pagosProx.map((p: any) => {
+          const venc = p.fecha_proximo_pago < todayISO;
+          return (
+            <a href={`/district/miembros/${p.id}`} class="card" style={`display:block;color:inherit;text-decoration:none;margin-bottom:8px;${venc ? 'border-left:3px solid var(--danger,#e25555)' : ''}`}>
+              <div style="display:flex;justify-content:space-between;gap:14px">
+                <div style="flex:1;min-width:0">
+                  <div style="font-weight:500;font-size:14px">{p.nombre}</div>
+                  <small class="text-muted">{p.plan_nombre} · ${Math.round(p.precio_mxn).toLocaleString('es-MX')}</small>
+                </div>
+                <small class="mono" style={venc ? 'color:var(--danger,#e25555)' : 'color:var(--gold)'}>{formatFecha(p.fecha_proximo_pago)}</small>
+              </div>
+            </a>
+          );
+        })
+      ) : (
+        <p class="text-muted">Nada por cobrar en los próximos 7 días.</p>
+      )}
+    </div>
+
+    <div class="col">
+      <h2 style="margin-bottom:14px">Próximas reservas</h2>
+      {proximasReservas && proximasReservas.length > 0 ? (
+        proximasReservas.map((r: any) => (
+          <a href={`/district/estudio/${r.id}`} class="card" style="display:block;color:inherit;text-decoration:none;margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;gap:14px">
+              <div style="flex:1;min-width:0">
+                <div style="font-weight:500;font-size:14px">{r.miembro_nombre ?? r.cliente_libre ?? '—'} <span class="chip" style="margin-left:6px">{r.tipo}</span></div>
+                <small class="text-muted mono">{formatFecha(r.fecha)} {r.hora_inicio}-{r.hora_fin}</small>
+              </div>
+            </div>
+          </a>
+        ))
+      ) : (
+        <p class="text-muted">Sin reservas próximas.</p>
+      )}
+    </div>
+  </div>
+</Layout>

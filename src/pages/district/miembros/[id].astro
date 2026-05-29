@@ -1,0 +1,293 @@
+---
+import Layout from '../../../components/Layout.astro';
+import DistrictNav from '../../../components/DistrictNav.astro';
+import { requireUser, canEdit } from '../../../lib/session';
+import { getDB, now } from '../../../lib/db';
+import { newId } from '../../../lib/ids';
+import { formatFecha } from '../../../lib/fechas';
+
+const user = requireUser(Astro);
+const editable = canEdit(user);
+const db = getDB(Astro);
+const { id } = Astro.params;
+
+let saved = false;
+let error: string | null = null;
+
+if (Astro.request.method === 'POST' && editable) {
+  const form = await Astro.request.formData();
+  const method = form.get('_method');
+  const action = form.get('_action');
+
+  if (method === 'DELETE') {
+    await db.prepare('DELETE FROM miembros_district WHERE id = ?').bind(id).run();
+    return Astro.redirect('/district/miembros');
+  }
+
+  if (action === 'toggle_activo') {
+    const current = form.get('current') === '1' ? 0 : 1;
+    await db.prepare('UPDATE miembros_district SET activo = ?, updated_at = ? WHERE id = ?').bind(current, now(), id).run();
+    return Astro.redirect(`/district/miembros/${id}`);
+  }
+
+  if (action === 'add_membresia') {
+    const planId = form.get('plan_id') as string;
+    const fechaInicio = (form.get('fecha_inicio') as string) || new Date().toISOString().slice(0, 10);
+    const plan = await db.prepare('SELECT duracion_dias, precio_mxn FROM planes_district WHERE id = ?').bind(planId).first<any>();
+    if (!plan) {
+      error = 'Plan inválido.';
+    } else {
+      const fp = new Date(fechaInicio + 'T00:00:00Z');
+      fp.setUTCDate(fp.getUTCDate() + plan.duracion_dias);
+      const fechaProxPago = fp.toISOString().slice(0, 10);
+      const precioPactado = Number(form.get('precio_pactado_mxn')) || plan.precio_mxn;
+      const ts = now();
+      // Desactivar membresias anteriores activas
+      await db.prepare("UPDATE membresias_district SET estado = 'finalizada', updated_at = ? WHERE miembro_id = ? AND estado = 'activa'").bind(ts, id).run();
+      await db
+        .prepare(
+          `INSERT INTO membresias_district (id, miembro_id, plan_id, fecha_inicio, fecha_proximo_pago, estado, precio_pactado_mxn, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'activa', ?, ?, ?)`
+        )
+        .bind(newId(), id, planId, fechaInicio, fechaProxPago, precioPactado, ts, ts)
+        .run();
+      return Astro.redirect(`/district/miembros/${id}`);
+    }
+  }
+
+  if (action === 'registrar_pago') {
+    const membresiaId = form.get('membresia_id') as string;
+    const mem = await db.prepare('SELECT m.fecha_proximo_pago, p.duracion_dias FROM membresias_district m JOIN planes_district p ON p.id = m.plan_id WHERE m.id = ?').bind(membresiaId).first<any>();
+    if (mem) {
+      const fp = new Date(mem.fecha_proximo_pago + 'T00:00:00Z');
+      fp.setUTCDate(fp.getUTCDate() + mem.duracion_dias);
+      await db
+        .prepare("UPDATE membresias_district SET fecha_proximo_pago = ?, estado = 'activa', updated_at = ? WHERE id = ?")
+        .bind(fp.toISOString().slice(0, 10), now(), membresiaId)
+        .run();
+    }
+    return Astro.redirect(`/district/miembros/${id}`);
+  }
+
+  if (action === 'cancelar_membresia') {
+    const membresiaId = form.get('membresia_id') as string;
+    await db.prepare("UPDATE membresias_district SET estado = 'cancelada', updated_at = ? WHERE id = ?").bind(now(), membresiaId).run();
+    return Astro.redirect(`/district/miembros/${id}`);
+  }
+
+  // Update miembro
+  const nombre = (form.get('nombre') as string)?.trim();
+  if (!nombre) {
+    error = 'Nombre obligatorio.';
+  } else {
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+    await db
+      .prepare(
+        `UPDATE miembros_district SET nombre = ?, email = ?, whatsapp = ?, empresa = ?, instagram = ?, notas = ?, updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(nombre, get('email'), get('whatsapp'), get('empresa'), get('instagram'), get('notas'), now(), id)
+      .run();
+    saved = true;
+  }
+}
+
+const miembro = await db.prepare('SELECT * FROM miembros_district WHERE id = ?').bind(id).first<any>();
+if (!miembro) return Astro.redirect('/district/miembros');
+
+const { results: membresias } = await db
+  .prepare(
+    `SELECT m.*, p.nombre as plan_nombre, p.tipo as plan_tipo, p.duracion_dias
+     FROM membresias_district m
+     JOIN planes_district p ON p.id = m.plan_id
+     WHERE m.miembro_id = ?
+     ORDER BY m.created_at DESC`
+  )
+  .bind(id)
+  .all<any>();
+
+const { results: planesDisponibles } = await db
+  .prepare("SELECT id, nombre, precio_mxn, duracion_dias FROM planes_district WHERE activo = 1 ORDER BY tipo, precio_mxn")
+  .all<any>();
+
+const membresiaActiva = membresias?.find((m: any) => m.estado === 'activa');
+const todayISO = new Date().toISOString().slice(0, 10);
+const venc = membresiaActiva && membresiaActiva.fecha_proximo_pago < todayISO;
+
+const { results: reservasMiembro } = await db
+  .prepare(
+    `SELECT id, fecha, hora_inicio, hora_fin, tipo, 'estudio' as kind FROM reservas_estudio WHERE miembro_id = ? AND fecha >= date('now', 'localtime')
+     UNION ALL
+     SELECT id, fecha, hora_inicio, hora_fin, tipo, 'cowork' as kind FROM reservas_cowork WHERE miembro_id = ? AND fecha >= date('now', 'localtime')
+     ORDER BY fecha, hora_inicio LIMIT 20`
+  )
+  .bind(id, id)
+  .all<any>();
+---
+
+<Layout title={miembro.nombre} pageTitle="District Studio">
+  <div class="page-head">
+    <h1>{miembro.nombre}{!miembro.activo && <small class="text-muted" style="font-size:14px;margin-left:10px">inactivo</small>}</h1>
+    <div style="display:flex;gap:10px">
+      <a href="/district/miembros" class="btn btn-sm">Volver</a>
+      {editable && (
+        <>
+          <form method="POST" action={`/district/miembros/${id}`} style="display:inline">
+            <input type="hidden" name="_action" value="toggle_activo" />
+            <input type="hidden" name="current" value={miembro.activo ? '1' : '0'} />
+            <button type="submit" class="btn btn-sm">{miembro.activo ? 'Desactivar' : 'Activar'}</button>
+          </form>
+          <form method="POST" action={`/district/miembros/${id}`} onsubmit="return confirm('¿Eliminar este miembro y todas sus membresías?')" style="display:inline">
+            <input type="hidden" name="_method" value="DELETE" />
+            <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
+          </form>
+        </>
+      )}
+    </div>
+  </div>
+  <DistrictNav />
+
+  {saved && <p class="text-ok" style="margin-bottom:20px">Guardado.</p>}
+  {error && <p class="text-danger" style="margin-bottom:20px">{error}</p>}
+
+  {membresiaActiva ? (
+    <div class="card" style={`margin-bottom:24px;${venc ? 'border-left:3px solid var(--danger,#e25555)' : 'border-left:3px solid var(--gold)'}`}>
+      <div class="card-meta">Membresía vigente</div>
+      <div class="row" style="margin-top:8px">
+        <div class="col">
+          <div class="card-title">{membresiaActiva.plan_nombre}</div>
+          <small class="text-muted">{membresiaActiva.plan_tipo}</small>
+        </div>
+        <div class="col">
+          <div class="card-meta">Próximo pago</div>
+          <div class="mono" style={venc ? 'color:var(--danger,#e25555);font-size:18px' : 'color:var(--gold);font-size:18px'}>{formatFecha(membresiaActiva.fecha_proximo_pago)}</div>
+          {venc && <small style="color:var(--danger,#e25555)">vencido</small>}
+        </div>
+        <div class="col">
+          <div class="card-meta">Precio pactado</div>
+          <div class="mono" style="font-size:18px">${Math.round(membresiaActiva.precio_pactado_mxn ?? 0).toLocaleString('es-MX')}</div>
+        </div>
+        {editable && (
+          <div class="col" style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
+            <form method="POST" action={`/district/miembros/${id}`} style="display:inline">
+              <input type="hidden" name="_action" value="registrar_pago" />
+              <input type="hidden" name="membresia_id" value={membresiaActiva.id} />
+              <button type="submit" class="btn btn-primary btn-sm">Registrar pago</button>
+            </form>
+            <form method="POST" action={`/district/miembros/${id}`} onsubmit="return confirm('¿Cancelar la membresía?')" style="display:inline">
+              <input type="hidden" name="_action" value="cancelar_membresia" />
+              <input type="hidden" name="membresia_id" value={membresiaActiva.id} />
+              <button type="submit" class="btn btn-sm btn-danger">Cancelar</button>
+            </form>
+          </div>
+        )}
+      </div>
+    </div>
+  ) : (
+    <p class="text-muted" style="margin-bottom:20px">Sin membresía activa.</p>
+  )}
+
+  {editable && (planesDisponibles?.length ?? 0) > 0 && (
+    <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:32px">
+      <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Asignar / renovar membresía</summary>
+      <form method="POST" action={`/district/miembros/${id}`} style="margin-top:16px">
+        <input type="hidden" name="_action" value="add_membresia" />
+        <div class="row">
+          <div class="col">
+            <label class="label">Plan *</label>
+            <select class="select" name="plan_id" required>
+              <option value="">— elige plan —</option>
+              {planesDisponibles?.map((p: any) => (
+                <option value={p.id}>{p.nombre} (${Math.round(p.precio_mxn).toLocaleString('es-MX')} / {p.duracion_dias}d)</option>
+              ))}
+            </select>
+          </div>
+          <div class="col">
+            <label class="label">Fecha inicio</label>
+            <input class="input" type="date" name="fecha_inicio" value={todayISO} />
+          </div>
+          <div class="col">
+            <label class="label">Precio pactado (opcional)</label>
+            <input class="input" type="number" step="0.01" name="precio_pactado_mxn" placeholder="usa precio del plan si vacío" />
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary" style="margin-top:14px">Asignar membresía</button>
+        <p class="text-muted" style="font-size:12px;margin-top:8px">Si ya tiene una membresía activa, se cierra y se reemplaza.</p>
+      </form>
+    </details>
+  )}
+
+  <h2>Historial de membresías</h2>
+  {membresias && membresias.length > 0 ? (
+    <div class="table-card" style="margin-bottom:32px">
+      <table>
+        <thead>
+          <tr><th>Plan</th><th>Inicio</th><th>Próximo pago</th><th>Estado</th><th class="right">Precio</th></tr>
+        </thead>
+        <tbody>
+          {membresias.map((m: any) => (
+            <tr>
+              <td><strong>{m.plan_nombre}</strong> <span class="text-muted">{m.plan_tipo}</span></td>
+              <td class="mono">{formatFecha(m.fecha_inicio)}</td>
+              <td class="mono">{formatFecha(m.fecha_proximo_pago)}</td>
+              <td><span class={`chip ${m.estado === 'activa' ? 'chip-ok' : 'chip'}`}>{m.estado}</span></td>
+              <td class="right mono">${Math.round(m.precio_pactado_mxn ?? 0).toLocaleString('es-MX')}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  ) : (
+    <p class="text-muted" style="margin-bottom:32px">Sin membresías registradas.</p>
+  )}
+
+  <h2>Próximas reservas</h2>
+  {reservasMiembro && reservasMiembro.length > 0 ? (
+    <div style="margin-bottom:32px">
+      {reservasMiembro.map((r: any) => (
+        <a href={r.kind === 'estudio' ? `/district/estudio/${r.id}` : `/district/cowork/${r.id}`} class="card" style="display:block;color:inherit;text-decoration:none;margin-bottom:6px">
+          <div style="display:flex;justify-content:space-between;gap:14px">
+            <div>
+              <span class="chip">{r.kind} · {r.tipo}</span>
+            </div>
+            <small class="mono">{formatFecha(r.fecha)} {r.hora_inicio}{r.hora_fin ? '-' + r.hora_fin : ''}</small>
+          </div>
+        </a>
+      ))}
+    </div>
+  ) : (
+    <p class="text-muted" style="margin-bottom:32px">Sin reservas próximas.</p>
+  )}
+
+  <h2>Datos del miembro</h2>
+  <form method="POST" action={`/district/miembros/${id}`}>
+    <label class="label">Nombre *</label>
+    <input class="input" name="nombre" value={miembro.nombre} required />
+    <div class="row">
+      <div class="col">
+        <label class="label">Email</label>
+        <input class="input" type="email" name="email" value={miembro.email ?? ''} />
+      </div>
+      <div class="col">
+        <label class="label">WhatsApp</label>
+        <input class="input" name="whatsapp" value={miembro.whatsapp ?? ''} />
+      </div>
+      <div class="col">
+        <label class="label">Empresa</label>
+        <input class="input" name="empresa" value={miembro.empresa ?? ''} />
+      </div>
+      <div class="col">
+        <label class="label">Instagram</label>
+        <input class="input" name="instagram" value={miembro.instagram ?? ''} />
+      </div>
+    </div>
+    <label class="label">Notas</label>
+    <textarea class="textarea" name="notas">{miembro.notas ?? ''}</textarea>
+    {editable && (
+      <div class="form-actions"><button type="submit" class="btn btn-primary">Guardar cambios</button></div>
+    )}
+  </form>
+</Layout>

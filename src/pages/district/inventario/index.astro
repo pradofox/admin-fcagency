@@ -1,0 +1,194 @@
+---
+import Layout from '../../../components/Layout.astro';
+import DistrictNav from '../../../components/DistrictNav.astro';
+import EmptyState from '../../../components/EmptyState.astro';
+import { requireUser, canEdit } from '../../../lib/session';
+import { getDB, now } from '../../../lib/db';
+import { newId } from '../../../lib/ids';
+
+const user = requireUser(Astro);
+const editable = canEdit(user);
+const db = getDB(Astro);
+
+let error: string | null = null;
+
+if (Astro.request.method === 'POST' && editable) {
+  const form = await Astro.request.formData();
+  const nombre = (form.get('nombre') as string)?.trim();
+  if (!nombre) {
+    error = 'Nombre obligatorio.';
+  } else {
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+    const num = (k: string, def = 0) => {
+      const v = form.get(k);
+      const n = v === null || v === '' ? def : Number(v);
+      return Number.isFinite(n) ? n : def;
+    };
+    const id = newId();
+    const ts = now();
+    const cantidad = num('cantidad_total', 1);
+    await db
+      .prepare(
+        `INSERT INTO inventario_district (
+          id, nombre, categoria, marca, modelo, serial, ubicacion, estado,
+          cantidad_total, cantidad_disponible, valor_mxn, notas, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'disponible', ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        id, nombre, get('categoria'), get('marca'), get('modelo'), get('serial'), get('ubicacion'),
+        cantidad, cantidad, num('valor_mxn'), get('notas'), ts, ts
+      )
+      .run();
+    return Astro.redirect(`/district/inventario/${id}`);
+  }
+}
+
+const search = (Astro.url.searchParams.get('q') ?? '').trim();
+const filtro = Astro.url.searchParams.get('filtro') ?? 'todos';
+const categoria = Astro.url.searchParams.get('categoria') ?? '';
+
+const where: string[] = [];
+const binds: any[] = [];
+if (search) {
+  const like = `%${search}%`;
+  where.push('(nombre LIKE ? OR marca LIKE ? OR modelo LIKE ? OR serial LIKE ? OR ubicacion LIKE ?)');
+  binds.push(like, like, like, like, like);
+}
+if (filtro === 'disponibles') where.push("estado = 'disponible' AND cantidad_disponible > 0");
+if (filtro === 'prestados') where.push("estado = 'prestado'");
+if (filtro === 'mantenimiento') where.push("estado IN ('mantenimiento','roto')");
+if (categoria) { where.push('categoria = ?'); binds.push(categoria); }
+
+const sql = `SELECT * FROM inventario_district ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY nombre LIMIT 300`;
+const { results: items } = await db.prepare(sql).bind(...binds).all<any>();
+
+const { results: categorias } = await db
+  .prepare("SELECT DISTINCT categoria as c FROM inventario_district WHERE categoria IS NOT NULL AND categoria <> '' ORDER BY categoria")
+  .all<{ c: string }>();
+
+const estadoColor: Record<string, string> = {
+  disponible: 'chip-ok',
+  prestado: 'chip-warning',
+  mantenimiento: 'chip',
+  roto: 'chip-danger'
+};
+---
+
+<Layout title="Inventario" pageTitle="District Studio">
+  <div class="page-head">
+    <h1>Inventario</h1>
+  </div>
+  <DistrictNav />
+
+  {error && <p class="text-danger" style="margin-bottom:16px">{error}</p>}
+
+  {editable && (
+    <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:24px" open={!!error}>
+      <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Nuevo item</summary>
+      <form method="POST" action="/district/inventario" style="margin-top:16px">
+        <div class="row">
+          <div class="col">
+            <label class="label">Nombre *</label>
+            <input class="input" name="nombre" required placeholder="Ej. Lente 50mm 1.8" />
+          </div>
+          <div class="col">
+            <label class="label">Categoría</label>
+            <input class="input" name="categoria" placeholder="Cámaras, Iluminación, Audio..." />
+          </div>
+          <div class="col">
+            <label class="label">Marca</label>
+            <input class="input" name="marca" />
+          </div>
+          <div class="col">
+            <label class="label">Modelo</label>
+            <input class="input" name="modelo" />
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <label class="label">Serial</label>
+            <input class="input" name="serial" />
+          </div>
+          <div class="col">
+            <label class="label">Ubicación</label>
+            <input class="input" name="ubicacion" placeholder="Bodega, set..." />
+          </div>
+          <div class="col">
+            <label class="label">Cantidad</label>
+            <input class="input" type="number" name="cantidad_total" value="1" />
+          </div>
+          <div class="col">
+            <label class="label">Valor MXN</label>
+            <input class="input" type="number" step="0.01" name="valor_mxn" />
+          </div>
+        </div>
+        <label class="label">Notas</label>
+        <textarea class="textarea" name="notas"></textarea>
+        <button type="submit" class="btn btn-primary" style="margin-top:14px">Crear item</button>
+      </form>
+    </details>
+  )}
+
+  <form method="GET" action="/district/inventario" class="toolbar">
+    <input class="input" type="search" name="q" value={search} placeholder="Buscar nombre, marca, modelo, serial, ubicación…" />
+    {filtro !== 'todos' && <input type="hidden" name="filtro" value={filtro} />}
+    {categoria && <input type="hidden" name="categoria" value={categoria} />}
+  </form>
+
+  <div class="filters" style="margin-bottom:8px">
+    {[
+      { v: 'todos', label: 'todos' },
+      { v: 'disponibles', label: 'disponibles' },
+      { v: 'prestados', label: 'prestados' },
+      { v: 'mantenimiento', label: 'mantenimiento / rotos' }
+    ].map((f) => (
+      <a href={`/district/inventario?filtro=${f.v}${search ? '&q=' + encodeURIComponent(search) : ''}${categoria ? '&categoria=' + categoria : ''}`} class={`filter-chip ${filtro === f.v ? 'active' : ''}`}>{f.label}</a>
+    ))}
+  </div>
+
+  {categorias && categorias.length > 0 && (
+    <div class="filters" style="margin-bottom:24px">
+      <a href={`/district/inventario?filtro=${filtro}${search ? '&q=' + encodeURIComponent(search) : ''}`} class={`filter-chip ${!categoria ? 'active' : ''}`}>todas categorías</a>
+      {categorias.map((c) => (
+        <a href={`/district/inventario?filtro=${filtro}&categoria=${encodeURIComponent(c.c)}${search ? '&q=' + encodeURIComponent(search) : ''}`} class={`filter-chip ${categoria === c.c ? 'active' : ''}`}>{c.c}</a>
+      ))}
+    </div>
+  )}
+
+  {items && items.length > 0 ? (
+    <div class="table-card">
+      <table>
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Categoría</th>
+            <th>Ubicación</th>
+            <th class="right">Disp / Tot</th>
+            <th>Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((it: any) => (
+            <tr>
+              <td>
+                <a href={`/district/inventario/${it.id}`} style="color:inherit">
+                  <strong>{it.nombre}</strong>
+                  {(it.marca || it.modelo) && <small class="text-muted" style="display:block">{[it.marca, it.modelo].filter(Boolean).join(' ')}</small>}
+                </a>
+              </td>
+              <td>{it.categoria ?? <span class="text-muted">—</span>}</td>
+              <td><small class="text-muted">{it.ubicacion ?? '—'}</small></td>
+              <td class="right mono">{it.cantidad_disponible} / {it.cantidad_total}</td>
+              <td><span class={`chip ${estadoColor[it.estado] ?? ''}`}>{it.estado}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  ) : (
+    <EmptyState title="Sin items" message="Crea el primer item para empezar a controlar el inventario." />
+  )}
+</Layout>

@@ -1,0 +1,82 @@
+---
+import Layout from '../../../components/Layout.astro';
+import DistrictNav from '../../../components/DistrictNav.astro';
+import { requireUser, canEdit } from '../../../lib/session';
+import { getDB, now } from '../../../lib/db';
+import { newId } from '../../../lib/ids';
+
+const user = requireUser(Astro);
+const db = getDB(Astro);
+if (!canEdit(user)) return Astro.redirect('/district/miembros');
+
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const nombre = (form.get('nombre') as string)?.trim();
+  if (!nombre) {
+    error = 'Nombre obligatorio.';
+  } else {
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+    const id = newId();
+    const ts = now();
+    await db
+      .prepare(
+        `INSERT INTO miembros_district (id, nombre, email, whatsapp, empresa, instagram, notas, activo, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+      )
+      .bind(id, nombre, get('email'), get('whatsapp'), get('empresa'), get('instagram'), get('notas'), ts, ts)
+      .run();
+    return Astro.redirect(`/district/miembros/${id}`);
+  }
+}
+---
+
+<Layout title="Nuevo miembro" pageTitle="District Studio">
+  <div class="page-head">
+    <h1>Nuevo miembro</h1>
+    <a href="/district/miembros" class="btn btn-sm">Volver</a>
+  </div>
+  <DistrictNav />
+
+  {error && <p class="text-danger">{error}</p>}
+
+  <form method="POST" action="/district/miembros/nuevo">
+    <label class="label">Nombre *</label>
+    <input class="input" name="nombre" required autofocus />
+
+    <div class="row">
+      <div class="col">
+        <label class="label">Email</label>
+        <input class="input" type="email" name="email" />
+      </div>
+      <div class="col">
+        <label class="label">WhatsApp</label>
+        <input class="input" name="whatsapp" />
+      </div>
+      <div class="col">
+        <label class="label">Empresa</label>
+        <input class="input" name="empresa" />
+      </div>
+      <div class="col">
+        <label class="label">Instagram</label>
+        <input class="input" name="instagram" placeholder="@usuario" />
+      </div>
+    </div>
+
+    <label class="label">Notas</label>
+    <textarea class="textarea" name="notas"></textarea>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Crear miembro</button>
+      <a href="/district/miembros" class="btn">Cancelar</a>
+    </div>
+
+    <p class="text-muted" style="font-size:12px;margin-top:14px">
+      Después de crearlo podrás asignarle una membresía con plan y fecha de pago.
+    </p>
+  </form>
+</Layout>
