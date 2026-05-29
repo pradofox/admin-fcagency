@@ -1,0 +1,94 @@
+---
+import Layout from '../../components/Layout.astro';
+import { requireUser, canEdit } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
+
+const user = requireUser(Astro);
+const editable = canEdit(user);
+const db = getDB(Astro);
+
+if (!editable) return Astro.redirect('/cotizaciones');
+
+let error: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const titulo = (form.get('titulo') as string)?.trim();
+
+  if (!titulo) {
+    error = 'El título es obligatorio.';
+  } else {
+    // Auto-numero COT-001
+    const lastRow = await db
+      .prepare("SELECT numero FROM cotizaciones WHERE numero LIKE 'COT-%' ORDER BY numero DESC LIMIT 1")
+      .first<any>();
+    let nextNum = 1;
+    if (lastRow?.numero) {
+      const m = /COT-(\d+)/.exec(lastRow.numero);
+      if (m) nextNum = parseInt(m[1]) + 1;
+    }
+    const numero = `COT-${String(nextNum).padStart(3, '0')}`;
+
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+
+    const ts = now();
+    const id = newId();
+    await db
+      .prepare(
+        `INSERT INTO cotizaciones (id, numero, cliente_id, cliente_libre, titulo, estado, fecha_vencimiento, notas, notas_internas, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'borrador', ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(id, numero, get('cliente_id'), get('cliente_libre'), titulo, get('fecha_vencimiento'), get('notas'), get('notas_internas'), user.id, ts, ts)
+      .run();
+    return Astro.redirect(`/cotizaciones/${id}`);
+  }
+}
+
+const { results: clientes } = await db
+  .prepare('SELECT id, nombre FROM clientes ORDER BY nombre')
+  .all<any>();
+---
+
+<Layout title="Nueva cotización" pageTitle="Cotizaciones">
+  <div class="page-head">
+    <h1>Nueva cotización</h1>
+    <a href="/cotizaciones" class="btn btn-sm">Cancelar</a>
+  </div>
+
+  {error && <p class="text-danger" style="margin-bottom:16px">{error}</p>}
+
+  <form method="POST" action="/cotizaciones/nueva">
+    <label class="label">Título / Descripción del servicio *</label>
+    <input class="input" name="titulo" required placeholder="Ej. Campaña verano 2026 — Foto + Video" />
+
+    <div class="row">
+      <div class="col">
+        <label class="label">Cliente registrado</label>
+        <select class="select" name="cliente_id">
+          <option value="">— sin asignar —</option>
+          {clientes?.map((c: any) => <option value={c.id}>{c.nombre}</option>)}
+        </select>
+      </div>
+      <div class="col">
+        <label class="label">O cliente libre (nombre)</label>
+        <input class="input" name="cliente_libre" placeholder="Si no está registrado" />
+      </div>
+      <div class="col">
+        <label class="label">Fecha vencimiento</label>
+        <input class="input" type="date" name="fecha_vencimiento" />
+      </div>
+    </div>
+
+    <label class="label">Notas para el cliente</label>
+    <textarea class="textarea" name="notas" placeholder="Términos, condiciones, alcance..."></textarea>
+
+    <label class="label">Notas internas</label>
+    <textarea class="textarea" name="notas_internas" placeholder="Solo visible internamente"></textarea>
+
+    <button type="submit" class="btn btn-primary" style="margin-top:16px">Crear cotización</button>
+  </form>
+</Layout>

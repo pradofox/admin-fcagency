@@ -38,17 +38,23 @@ if (Astro.request.method === 'POST' && editable) {
     // Verificar membresia del miembro (no aplica a clientes libres)
     if (miembroId) {
       const mem = await db
-        .prepare("SELECT id, fecha_proximo_pago FROM membresias_district WHERE miembro_id = ? AND estado = 'activa' LIMIT 1")
+        .prepare(`SELECT mb.id, mb.fecha_proximo_pago, p.tipo as plan_tipo, p.nombre as plan_nombre
+                  FROM membresias_district mb
+                  LEFT JOIN planes_district p ON p.id = mb.plan_id
+                  WHERE mb.miembro_id = ? AND mb.estado = 'activa' LIMIT 1`)
         .bind(miembroId)
         .first<any>();
+      const miembroRow = await db.prepare('SELECT nombre FROM miembros_district WHERE id = ?').bind(miembroId).first<any>();
+      const nombreMiembro = miembroRow?.nombre ?? 'Este miembro';
+
       if (!mem) {
-        const row = await db.prepare('SELECT nombre FROM miembros_district WHERE id = ?').bind(miembroId).first<any>();
-        error = `${row?.nombre ?? 'Este miembro'} no tiene membresía activa. Asigna una antes de reservar.`;
+        error = `${nombreMiembro} no tiene membresía activa. Asigna una antes de reservar.`;
       } else if (mem.fecha_proximo_pago < todayISO) {
-        const row = await db.prepare('SELECT nombre FROM miembros_district WHERE id = ?').bind(miembroId).first<any>();
         vencidaMiembroId = miembroId;
-        vencidaNombre    = row?.nombre ?? 'El miembro';
+        vencidaNombre    = nombreMiembro;
         error = `La membresía de ${vencidaNombre} está vencida.`;
+      } else if (mem.plan_tipo !== 'estudio' && mem.plan_tipo !== 'cowork') {
+        error = `${nombreMiembro} tiene membresía "${mem.plan_nombre}" (${mem.plan_tipo ?? 'sin tipo'}) — el estudio solo es accesible con membresía de estudio o cowork.`;
       }
     }
 
@@ -116,13 +122,15 @@ const sql = `SELECT r.id, r.fecha, r.hora_inicio, r.hora_fin, r.tipo, r.cliente_
 
 const { results: reservas } = await db.prepare(sql).bind(...binds).all<any>();
 
-// Dropdown con status de membresia visible
+// Dropdown con status de membresia y tipo de plan visible
 const { results: miembros } = await db
   .prepare(
     `SELECT mi.id, mi.nombre, mi.numero_membresia,
-            mb.fecha_proximo_pago as mem_vence
+            mb.fecha_proximo_pago as mem_vence,
+            p.tipo as plan_tipo, p.nombre as plan_nombre
      FROM miembros_district mi
      LEFT JOIN membresias_district mb ON mb.miembro_id = mi.id AND mb.estado = 'activa'
+     LEFT JOIN planes_district p ON p.id = mb.plan_id
      WHERE mi.activo = 1
      ORDER BY mi.nombre`
   )
@@ -175,14 +183,16 @@ const { results: miembros } = await db
         </div>
         <div class="row">
           <div class="col">
-            <label class="label">Miembro <small class="text-muted">(verifica membresía)</small></label>
-            <select class="select" name="miembro_id">
-              <option value="">— sin asignar —</option>
+            <label class="label">Miembro <small class="text-muted">(solo estudio o cowork)</small></label>
+            <select class="select" name="miembro_id" id="sel_miembro" onchange="calcPrecioEstudio()">
+              <option value="" data-tipo="">— sin asignar (externo) —</option>
               {miembros?.map((m: any) => {
-                const vencida = m.mem_vence && m.mem_vence < todayISO;
-                const sinMem  = !m.mem_vence;
-                const label   = `${m.nombre}${m.numero_membresia ? ' (' + m.numero_membresia + ')' : ''}${vencida ? ' ⚠ VENCIDA' : sinMem ? ' — sin membresía' : ' ✓'}`;
-                return <option value={m.id}>{label}</option>;
+                const vencida  = m.mem_vence && m.mem_vence < todayISO;
+                const sinMem   = !m.mem_vence;
+                const planInfo = m.plan_tipo ? ` [${m.plan_tipo}]` : ' — sin membresía';
+                const estado   = vencida ? ' ⚠ VENCIDA' : sinMem ? '' : ' ✓';
+                const label    = `${m.nombre}${m.numero_membresia ? ' (' + m.numero_membresia + ')' : ''}${planInfo}${estado}`;
+                return <option value={m.id} data-tipo={m.plan_tipo ?? ''}>{label}</option>;
               })}
             </select>
           </div>
@@ -195,8 +205,8 @@ const { results: miembros } = await db
             <input class="input" name="contacto_whatsapp" />
           </div>
           <div class="col">
-            <label class="label">Precio MXN</label>
-            <input class="input" type="number" step="0.01" name="precio_mxn" />
+            <label class="label">Precio MXN <small class="text-muted" id="hint_precio">(externo $800/hr)</small></label>
+            <input class="input" type="number" step="1" name="precio_mxn" id="inp_precio" placeholder="0" />
           </div>
         </div>
         <label class="label">Notas</label>
@@ -205,6 +215,42 @@ const { results: miembros } = await db
       </form>
     </details>
   )}
+
+  <script>
+  function calcPrecioEstudio() {
+    const sel   = document.getElementById('sel_miembro') as HTMLSelectElement | null;
+    const hint  = document.getElementById('hint_precio');
+    const inp   = document.getElementById('inp_precio') as HTMLInputElement | null;
+    if (!sel || !inp) return;
+
+    const tipo      = sel.selectedOptions[0]?.dataset.tipo ?? '';
+    const tarifaHr  = tipo === 'cowork' ? 700 : 800;
+    const label     = tipo === 'estudio' ? 'membresía incluye horas — solo cobrar extras'
+                    : tipo === 'cowork'  ? `cowork $${tarifaHr}/hr`
+                    : `externo $${tarifaHr}/hr`;
+    if (hint) hint.textContent = label;
+
+    // Auto-calcular si ya hay horas seleccionadas
+    const inicio = (document.querySelector('input[name="hora_inicio"]') as HTMLInputElement)?.value;
+    const fin    = (document.querySelector('input[name="hora_fin"]')    as HTMLInputElement)?.value;
+    if (inicio && fin && inicio < fin) {
+      const [hi, mi] = inicio.split(':').map(Number);
+      const [hf, mf] = fin.split(':').map(Number);
+      const hrs = ((hf * 60 + mf) - (hi * 60 + mi)) / 60;
+      if (tipo !== 'estudio') {
+        inp.value = String(Math.round(hrs * tarifaHr));
+      } else {
+        // Membresía de estudio — horas ya pagadas, sugiere 0
+        inp.value = '0';
+      }
+    }
+  }
+
+  // También recalcular cuando cambian las horas
+  document.querySelectorAll('input[name="hora_inicio"], input[name="hora_fin"]').forEach((el) => {
+    el.addEventListener('change', calcPrecioEstudio);
+  });
+  </script>
 
   <div class="filters" style="margin-bottom:8px">
     {[

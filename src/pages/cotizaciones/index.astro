@@ -1,0 +1,89 @@
+---
+import Layout from '../../components/Layout.astro';
+import EmptyState from '../../components/EmptyState.astro';
+import { requireUser } from '../../lib/session';
+import { getDB } from '../../lib/db';
+import { formatFecha } from '../../lib/fechas';
+
+const user = requireUser(Astro);
+const db = getDB(Astro);
+
+const ESTADOS = ['borrador', 'enviada', 'autorizada', 'rechazada', 'convertida'] as const;
+
+const filtro = Astro.url.searchParams.get('estado') ?? '';
+
+const where = filtro ? 'WHERE c.estado = ?' : '';
+const binds: any[] = filtro ? [filtro] : [];
+
+const { results: cotizaciones } = await db
+  .prepare(
+    `SELECT c.id, c.numero, c.titulo, c.estado, c.fecha_vencimiento, c.created_at,
+            cl.nombre as cliente_nombre,
+            COALESCE(SUM(lc.cantidad * lc.precio_unitario), 0) as total
+     FROM cotizaciones c
+     LEFT JOIN clientes cl ON cl.id = c.cliente_id
+     LEFT JOIN lineas_cotizacion lc ON lc.cotizacion_id = c.id
+     ${where}
+     GROUP BY c.id
+     ORDER BY c.created_at DESC`
+  )
+  .bind(...binds)
+  .all<any>();
+
+const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
+
+const colorEstado: Record<string, string> = {
+  borrador:   '',
+  enviada:    'chip-warning',
+  autorizada: 'chip-ok',
+  rechazada:  'chip-danger',
+  convertida: ''
+};
+---
+
+<Layout title="Cotizaciones" pageTitle="Cotizaciones">
+  <div class="page-head">
+    <h1>Cotizaciones</h1>
+    <a href="/cotizaciones/nueva" class="btn btn-primary">+ Nueva cotización</a>
+  </div>
+
+  <div class="filters" style="margin-bottom:24px">
+    <a href="/cotizaciones" class={`filter-chip ${!filtro ? 'active' : ''}`}>Todas</a>
+    {ESTADOS.map((e) => (
+      <a href={`/cotizaciones?estado=${e}`} class={`filter-chip ${filtro === e ? 'active' : ''}`}
+         style={e === 'autorizada' ? 'color:var(--text-ok,#4ade80)' : e === 'rechazada' ? 'color:var(--danger,#e25555)' : ''}>
+        {e}
+      </a>
+    ))}
+  </div>
+
+  {cotizaciones && cotizaciones.length > 0 ? (
+    <div>
+      {cotizaciones.map((c: any) => (
+        <a href={`/cotizaciones/${c.id}`} class="card" style={`display:block;color:inherit;text-decoration:none;margin-bottom:8px;${c.estado === 'autorizada' ? 'border-left:3px solid var(--text-ok,#4ade80)' : c.estado === 'rechazada' ? 'border-left:3px solid var(--danger,#e25555)' : c.estado === 'enviada' ? 'border-left:3px solid #e9b949' : ''}`}>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:16px">
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;gap:10px;align-items:baseline">
+                <span class="mono" style="font-size:11px;color:var(--gold)">{c.numero}</span>
+                <span style="font-weight:600">{c.titulo}</span>
+              </div>
+              <div class="card-meta" style="margin-top:4px">
+                <span class="text-muted">{c.cliente_nombre ?? 'Sin cliente'}</span>
+                <span class={`chip ${colorEstado[c.estado] ?? ''}`}>{c.estado}</span>
+                {c.fecha_vencimiento && (
+                  <span class={`mono ${new Date(c.fecha_vencimiento) < new Date() && c.estado !== 'autorizada' && c.estado !== 'convertida' ? 'text-danger' : 'text-muted'}`}>
+                    vence {formatFecha(c.fecha_vencimiento)}
+                  </span>
+                )}
+                {c.estado === 'convertida' && <span class="chip chip-ok">proyecto creado</span>}
+              </div>
+            </div>
+            <div class="mono" style="font-size:18px;color:var(--gold);flex-shrink:0">{fmt(c.total)}</div>
+          </div>
+        </a>
+      ))}
+    </div>
+  ) : (
+    <EmptyState title="Sin cotizaciones" message="Crea tu primera cotización para empezar." />
+  )}
+</Layout>

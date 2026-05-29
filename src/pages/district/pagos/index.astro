@@ -1,23 +1,95 @@
 ---
 import Layout from '../../../components/Layout.astro';
 import DistrictNav from '../../../components/DistrictNav.astro';
-import { requireUser } from '../../../lib/session';
-import { getDB } from '../../../lib/db';
+import { requireUser, canEdit } from '../../../lib/session';
+import { getDB, now } from '../../../lib/db';
+import { newId } from '../../../lib/ids';
 import { formatFecha } from '../../../lib/fechas';
 
-const user = requireUser(Astro);
-const db = getDB(Astro);
+const user     = requireUser(Astro);
+const editable = canEdit(user);
+const db       = getDB(Astro);
 
 const todayISO = new Date().toISOString().slice(0, 10);
-const en7d  = new Date(Date.now() + 7  * 864e5).toISOString().slice(0, 10);
-const en30d = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
+const en7d     = new Date(Date.now() + 7  * 864e5).toISOString().slice(0, 10);
+const en30d    = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
 
-const filtro = Astro.url.searchParams.get('filtro') ?? 'pendientes';
+let error:  string | null = null;
+let msgOk:  string | null = null;
 
-// --- Miembros con membresia activa o vencida ---
+// ── POST: registrar pago ───────────────────────────────────────────────────────
+if (Astro.request.method === 'POST' && editable) {
+  const form   = await Astro.request.formData();
+  const action = form.get('_action') as string;
+
+  if (action === 'registrar_pago') {
+    const miembroId  = (form.get('miembro_id') as string)?.trim();
+    const membresiaId = (form.get('membresia_id') as string)?.trim() || null;
+    const monto      = Number(form.get('monto_mxn') ?? 0) || 0;
+    const fechaPago  = (form.get('fecha_pago') as string)?.trim() || todayISO;
+    const metodo     = (form.get('metodo') as string)?.trim() || 'efectivo';
+    const reqFact    = form.get('requiere_factura') === '1' ? 1 : 0;
+    const conceptos  = (form.get('conceptos_factura') as string)?.trim() || null;
+    const notas      = (form.get('notas') as string)?.trim() || null;
+
+    if (!miembroId || monto <= 0) {
+      error = 'Selecciona un miembro y especifica el monto.';
+    } else {
+      const ts = now();
+      await db
+        .prepare(`INSERT INTO pagos_district
+                    (id, miembro_id, membresia_id, monto_mxn, fecha_pago, metodo,
+                     requiere_factura, conceptos_factura, notas, registrado_por, created_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(newId(), miembroId, membresiaId, monto, fechaPago, metodo, reqFact, conceptos, notas, user.id, ts)
+        .run();
+
+      // Si tiene membresía activa, avanzar fecha_proximo_pago un mes
+      if (membresiaId) {
+        const mem = await db.prepare('SELECT fecha_proximo_pago FROM membresias_district WHERE id = ?').bind(membresiaId).first<any>();
+        if (mem?.fecha_proximo_pago) {
+          const d = new Date(mem.fecha_proximo_pago + 'T12:00:00');
+          d.setMonth(d.getMonth() + 1);
+          const nuevaFecha = d.toISOString().slice(0, 10);
+          await db.prepare('UPDATE membresias_district SET fecha_proximo_pago = ?, updated_at = ? WHERE id = ?')
+            .bind(nuevaFecha, ts, membresiaId).run();
+        }
+      }
+
+      msgOk = `Pago registrado.${reqFact ? ' Factura agregada a la cola.' : ''}`;
+    }
+  }
+
+  if (action === 'marcar_factura') {
+    const pagoId = form.get('pago_id') as string;
+    await db.prepare('UPDATE pagos_district SET factura_emitida = 1 WHERE id = ?').bind(pagoId).run();
+    return Astro.redirect('/district/pagos?ok=factura');
+  }
+}
+
+// Flash ok desde query param
+if (!msgOk && Astro.url.searchParams.get('ok') === 'factura') {
+  msgOk = 'Factura marcada como emitida.';
+}
+
+// ── Datos para el formulario de nuevo pago ────────────────────────────────────
+const { results: miembrosActivos } = await db
+  .prepare(
+    `SELECT mi.id, mi.nombre, mi.numero_membresia,
+            mb.id as mem_id, mb.precio_pactado_mxn, mb.fecha_proximo_pago,
+            p.nombre as plan_nombre
+     FROM miembros_district mi
+     LEFT JOIN membresias_district mb ON mb.miembro_id = mi.id AND mb.estado = 'activa'
+     LEFT JOIN planes_district p ON p.id = mb.plan_id
+     WHERE mi.activo = 1
+     ORDER BY mi.nombre`
+  )
+  .all<any>();
+
+// ── Vencimientos ──────────────────────────────────────────────────────────────
 const { results: miembrosConMembresia } = await db
   .prepare(
-    `SELECT mi.id, mi.nombre, mi.numero_membresia, mi.whatsapp,
+    `SELECT mi.id, mi.nombre, mi.numero_membresia,
             mb.id as mem_id, mb.fecha_proximo_pago, mb.precio_pactado_mxn, mb.estado as mem_estado,
             p.nombre as plan_nombre
      FROM miembros_district mi
@@ -28,27 +100,46 @@ const { results: miembrosConMembresia } = await db
   )
   .all<any>();
 
-const vencidos  = miembrosConMembresia?.filter((m: any) => m.fecha_proximo_pago <  todayISO) ?? [];
-const proximos7 = miembrosConMembresia?.filter((m: any) => m.fecha_proximo_pago >= todayISO && m.fecha_proximo_pago <= en7d) ?? [];
-const proximos30 = miembrosConMembresia?.filter((m: any) => m.fecha_proximo_pago > en7d && m.fecha_proximo_pago <= en30d) ?? [];
+const vencidos   = miembrosConMembresia?.filter((m: any) => m.fecha_proximo_pago <  todayISO) ?? [];
+const proximos7  = miembrosConMembresia?.filter((m: any) => m.fecha_proximo_pago >= todayISO && m.fecha_proximo_pago <= en7d) ?? [];
+const proximos30 = miembrosConMembresia?.filter((m: any) => m.fecha_proximo_pago >  en7d      && m.fecha_proximo_pago <= en30d) ?? [];
 
-// --- Historial de pagos ---
+// ── Historial de pagos ────────────────────────────────────────────────────────
 const { results: historial } = await db
   .prepare(
     `SELECT pg.id, pg.fecha_pago, pg.monto_mxn, pg.metodo, pg.notas,
-            mi.nombre as miembro_nombre, mi.numero_membresia,
+            pg.requiere_factura, pg.factura_emitida, pg.conceptos_factura,
+            mi.id as miembro_id, mi.nombre as miembro_nombre, mi.numero_membresia,
             u.nombre as registrado_por_nombre
      FROM pagos_district pg
      JOIN miembros_district mi ON mi.id = pg.miembro_id
      LEFT JOIN users u ON u.id = pg.registrado_por
      ORDER BY pg.fecha_pago DESC, pg.created_at DESC
-     LIMIT 100`
+     LIMIT 200`
   )
   .all<any>();
+
+// ── Facturas por emitir ───────────────────────────────────────────────────────
+const facturasPendientes = historial?.filter((p: any) => p.requiere_factura === 1 && p.factura_emitida === 0) ?? [];
 
 const totalMes = historial
   ?.filter((p: any) => p.fecha_pago?.slice(0, 7) === todayISO.slice(0, 7))
   .reduce((sum: number, p: any) => sum + (p.monto_mxn ?? 0), 0) ?? 0;
+
+const METODOS = ['efectivo', 'transferencia', 'tarjeta'] as const;
+const REGIMENES = [
+  '601 - General de Ley Personas Morales',
+  '612 - Personas Físicas con Actividades Empresariales',
+  '616 - Sin obligaciones fiscales',
+  '621 - Incorporación Fiscal',
+  '626 - Régimen Simplificado de Confianza (RESICO)',
+];
+const USOS_CFDI = [
+  'G01 - Adquisición de mercancias',
+  'G03 - Gastos en general',
+  'I08 - Otra maquinaria y equipo',
+  'S01 - Sin efectos fiscales',
+];
 ---
 
 <Layout title="Pagos District" pageTitle="District Studio">
@@ -57,33 +148,145 @@ const totalMes = historial
   </div>
   <DistrictNav />
 
+  {error && <p class="text-danger" style="margin-bottom:16px">{error}</p>}
+  {msgOk && <p class="text-ok"    style="margin-bottom:16px">{msgOk}</p>}
+
+  {/* ── Cards resumen ── */}
   <div class="row" style="margin-bottom:24px">
     <div class="col card">
       <div class="card-meta">Vencidos</div>
       <div class="card-title mono" style={vencidos.length > 0 ? 'color:var(--danger,#e25555)' : ''}>{vencidos.length}</div>
     </div>
     <div class="col card">
-      <div class="card-meta">Vencen en 7 dias</div>
+      <div class="card-meta">Vencen en 7 días</div>
       <div class="card-title mono" style={proximos7.length > 0 ? 'color:#e9b949' : ''}>{proximos7.length}</div>
     </div>
     <div class="col card">
-      <div class="card-meta">Vencen en 30 dias</div>
+      <div class="card-meta">Vencen en 30 días</div>
       <div class="card-title mono">{proximos30.length}</div>
     </div>
     <div class="col card">
       <div class="card-meta">Cobrado este mes</div>
       <div class="card-title mono" style="color:var(--gold)">${Math.round(totalMes).toLocaleString('es-MX')}</div>
     </div>
+    {facturasPendientes.length > 0 && (
+      <div class="col card" style="border-left:3px solid #e9b949">
+        <div class="card-meta">Facturas por emitir</div>
+        <div class="card-title mono" style="color:#e9b949">{facturasPendientes.length}</div>
+      </div>
+    )}
   </div>
 
+  {/* ── Nuevo pago ── */}
+  {editable && (
+    <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:28px"
+             open={vencidos.length > 0 || !!error}>
+      <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Registrar pago</summary>
+      <form method="POST" action="/district/pagos" style="margin-top:16px" id="form_pago">
+        <input type="hidden" name="_action" value="registrar_pago" />
+
+        <div class="row">
+          <div class="col" style="flex:2">
+            <label class="label">Miembro *</label>
+            <select class="select" name="miembro_id" id="sel_miembro_pago" required onchange="onMiembroChange()">
+              <option value="">— seleccionar —</option>
+              {miembrosActivos?.map((m: any) => {
+                const vencida = m.fecha_proximo_pago && m.fecha_proximo_pago < todayISO;
+                const label = `${m.nombre}${m.numero_membresia ? ' (' + m.numero_membresia + ')' : ''}${m.plan_nombre ? ' — ' + m.plan_nombre : ''}${vencida ? ' ⚠ VENCIDA' : ''}`;
+                return <option value={m.id} data-mem-id={m.mem_id ?? ''} data-monto={m.precio_pactado_mxn ?? 0}>{label}</option>;
+              })}
+            </select>
+          </div>
+          <div class="col">
+            <label class="label">Membresía ID <small class="text-muted">(auto)</small></label>
+            <input class="input" name="membresia_id" id="inp_mem_id" placeholder="Se llena al elegir miembro" readonly style="opacity:.6" />
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="col">
+            <label class="label">Fecha del pago *</label>
+            <input class="input" type="date" name="fecha_pago" value={todayISO} required />
+          </div>
+          <div class="col">
+            <label class="label">Método de pago *</label>
+            <select class="select" name="metodo" required>
+              {METODOS.map((m) => <option value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>)}
+            </select>
+          </div>
+          <div class="col">
+            <label class="label">Monto MXN *</label>
+            <input class="input" type="number" name="monto_mxn" id="inp_monto" required min="0.01" step="0.01" placeholder="0" />
+          </div>
+        </div>
+
+        <div class="row" style="align-items:flex-start">
+          <div class="col">
+            <label class="label">Notas</label>
+            <input class="input" name="notas" placeholder="Opcional" />
+          </div>
+          <div class="col" style="display:flex;align-items:center;gap:8px;padding-top:22px">
+            <input type="checkbox" name="requiere_factura" value="1" id="chk_factura" onchange="toggleFactura()" style="width:16px;height:16px;cursor:pointer" />
+            <label for="chk_factura" class="label" style="margin:0;cursor:pointer">Requiere factura</label>
+          </div>
+        </div>
+
+        <div id="bloque_factura" style="display:none;background:var(--bg-3,#1a1a1a);border:1px solid var(--border);padding:12px;margin-top:4px;border-radius:4px">
+          <label class="label">Conceptos para la factura</label>
+          <input class="input" name="conceptos_factura" placeholder="Ej. Membresía Hot Desk mayo 2026" />
+          <p class="text-muted" style="font-size:11px;margin-top:4px">Este dato quedará guardado para cuando se emita el CFDI.</p>
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="margin-top:16px">Registrar pago</button>
+      </form>
+    </details>
+  )}
+
+  {/* ── Facturas por emitir ── */}
+  {facturasPendientes.length > 0 && (
+    <div style="margin-bottom:32px">
+      <h2 style="color:#e9b949;margin-bottom:12px">Facturas por emitir ({facturasPendientes.length})</h2>
+      <div class="table-card">
+        <table>
+          <thead>
+            <tr>
+              <th>Fecha</th><th>Miembro</th><th>No.</th><th>Método</th>
+              <th>Conceptos</th><th class="right">Monto</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {facturasPendientes.map((p: any) => (
+              <tr>
+                <td class="mono">{formatFecha(p.fecha_pago)}</td>
+                <td><a href={`/district/miembros/${p.miembro_id}`} style="color:inherit">{p.miembro_nombre}</a></td>
+                <td class="mono" style="color:var(--gold)">{p.numero_membresia ?? '—'}</td>
+                <td><span class="chip">{p.metodo}</span></td>
+                <td class="text-muted" style="font-size:12px">{p.conceptos_factura ?? '—'}</td>
+                <td class="right mono" style="color:var(--gold)">${Math.round(p.monto_mxn ?? 0).toLocaleString('es-MX')}</td>
+                <td>
+                  {editable && (
+                    <form method="POST" action="/district/pagos" style="display:inline">
+                      <input type="hidden" name="_action" value="marcar_factura" />
+                      <input type="hidden" name="pago_id" value={p.id} />
+                      <button type="submit" class="btn btn-sm btn-primary">✓ Factura emitida</button>
+                    </form>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )}
+
+  {/* ── Vencidos ── */}
   {vencidos.length > 0 && (
     <div style="margin-bottom:32px">
       <h2 style="color:var(--danger,#e25555);margin-bottom:12px">Vencidos ({vencidos.length})</h2>
       <div class="table-card">
         <table>
-          <thead>
-            <tr><th>Miembro</th><th>No.</th><th>Plan</th><th>Vencio</th><th class="right">Monto</th><th></th></tr>
-          </thead>
+          <thead><tr><th>Miembro</th><th>No.</th><th>Plan</th><th>Vencio</th><th class="right">Monto</th><th></th></tr></thead>
           <tbody>
             {vencidos.map((m: any) => (
               <tr>
@@ -92,7 +295,14 @@ const totalMes = historial
                 <td><small class="text-muted">{m.plan_nombre}</small></td>
                 <td class="mono" style="color:var(--danger,#e25555)">{formatFecha(m.fecha_proximo_pago)}</td>
                 <td class="right mono">${Math.round(m.precio_pactado_mxn ?? 0).toLocaleString('es-MX')}</td>
-                <td><a href={`/district/miembros/${m.id}`} class="btn btn-sm btn-primary">Registrar pago</a></td>
+                <td>
+                  {editable && (
+                    <button type="button" class="btn btn-sm btn-primary"
+                            onclick={`preselectMiembro('${m.id}','${m.mem_id ?? ''}',${m.precio_pactado_mxn ?? 0})`}>
+                      Registrar pago
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -101,14 +311,13 @@ const totalMes = historial
     </div>
   )}
 
+  {/* ── Próximos 7 días ── */}
   {proximos7.length > 0 && (
     <div style="margin-bottom:32px">
-      <h2 style="color:#e9b949;margin-bottom:12px">Vencen en 7 dias ({proximos7.length})</h2>
+      <h2 style="color:#e9b949;margin-bottom:12px">Vencen en 7 días ({proximos7.length})</h2>
       <div class="table-card">
         <table>
-          <thead>
-            <tr><th>Miembro</th><th>No.</th><th>Plan</th><th>Vence</th><th class="right">Monto</th><th></th></tr>
-          </thead>
+          <thead><tr><th>Miembro</th><th>No.</th><th>Plan</th><th>Vence</th><th class="right">Monto</th></tr></thead>
           <tbody>
             {proximos7.map((m: any) => (
               <tr>
@@ -117,7 +326,6 @@ const totalMes = historial
                 <td><small class="text-muted">{m.plan_nombre}</small></td>
                 <td class="mono" style="color:#e9b949">{formatFecha(m.fecha_proximo_pago)}</td>
                 <td class="right mono">${Math.round(m.precio_pactado_mxn ?? 0).toLocaleString('es-MX')}</td>
-                <td><a href={`/district/miembros/${m.id}`} class="btn btn-sm">Recordar pago</a></td>
               </tr>
             ))}
           </tbody>
@@ -126,14 +334,13 @@ const totalMes = historial
     </div>
   )}
 
+  {/* ── Próximos 30 días ── */}
   {proximos30.length > 0 && (
     <div style="margin-bottom:32px">
-      <h2 style="margin-bottom:12px">Proximos 30 dias ({proximos30.length})</h2>
+      <h2 style="margin-bottom:12px">Próximos 30 días ({proximos30.length})</h2>
       <div class="table-card">
         <table>
-          <thead>
-            <tr><th>Miembro</th><th>No.</th><th>Plan</th><th>Vence</th><th class="right">Monto</th></tr>
-          </thead>
+          <thead><tr><th>Miembro</th><th>No.</th><th>Plan</th><th>Vence</th><th class="right">Monto</th></tr></thead>
           <tbody>
             {proximos30.map((m: any) => (
               <tr>
@@ -150,21 +357,33 @@ const totalMes = historial
     </div>
   )}
 
+  {/* ── Historial de pagos ── */}
   <h2 style="margin-bottom:12px">Historial de pagos</h2>
   {historial && historial.length > 0 ? (
     <div class="table-card">
       <table>
         <thead>
-          <tr><th>Fecha</th><th>Miembro</th><th>No.</th><th>Metodo</th><th class="right">Monto</th><th>Registro</th></tr>
+          <tr>
+            <th>Fecha</th><th>Miembro</th><th>No.</th><th>Método</th>
+            <th class="right">Monto</th><th>Factura</th><th>Registro</th>
+          </tr>
         </thead>
         <tbody>
           {historial.map((p: any) => (
             <tr>
               <td class="mono">{formatFecha(p.fecha_pago)}</td>
-              <td><a href={`/district/miembros/${p.miembro_id ?? ''}`} style="color:inherit">{p.miembro_nombre}</a></td>
+              <td><a href={`/district/miembros/${p.miembro_id}`} style="color:inherit">{p.miembro_nombre}</a></td>
               <td class="mono" style="color:var(--gold)">{p.numero_membresia ?? '—'}</td>
               <td><span class="chip">{p.metodo ?? 'efectivo'}</span></td>
               <td class="right mono" style="color:var(--gold)">${Math.round(p.monto_mxn ?? 0).toLocaleString('es-MX')}</td>
+              <td>
+                {p.requiere_factura === 1
+                  ? (p.factura_emitida === 1
+                      ? <span class="chip chip-ok" style="font-size:10px">✓ emitida</span>
+                      : <span class="chip" style="color:#e9b949;font-size:10px">pendiente</span>)
+                  : <span class="text-muted" style="font-size:11px">—</span>
+                }
+              </td>
               <td><small class="text-muted">{p.registrado_por_nombre ?? '—'}</small></td>
             </tr>
           ))}
@@ -172,6 +391,40 @@ const totalMes = historial
       </table>
     </div>
   ) : (
-    <p class="text-muted">Sin pagos registrados todavia.</p>
+    <p class="text-muted">Sin pagos registrados todavía.</p>
   )}
 </Layout>
+
+<script define:vars={{ miembrosData: miembrosActivos }}>
+// Datos de miembros inyectados por el servidor para auto-fill
+function onMiembroChange() {
+  const sel   = document.getElementById('sel_miembro_pago');
+  if (!sel) return;
+  const opt   = sel.selectedOptions[0];
+  const memId = opt?.dataset.memId ?? '';
+  const monto = opt?.dataset.monto  ?? '0';
+
+  const inpMemId = document.getElementById('inp_mem_id');
+  const inpMonto = document.getElementById('inp_monto');
+  if (inpMemId) inpMemId.value = memId;
+  if (inpMonto && monto !== '0') inpMonto.value = monto;
+}
+
+function preselectMiembro(miembroId, memId, monto) {
+  const sel = document.getElementById('sel_miembro_pago');
+  if (sel) {
+    sel.value = miembroId;
+    onMiembroChange();
+  }
+  // Scroll y abrir el form
+  const det = document.querySelector('details');
+  if (det) det.open = true;
+  setTimeout(() => sel?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+}
+
+function toggleFactura() {
+  const chk    = document.getElementById('chk_factura');
+  const bloque = document.getElementById('bloque_factura');
+  if (bloque) bloque.style.display = chk?.checked ? 'block' : 'none';
+}
+</script>

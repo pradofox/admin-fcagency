@@ -15,6 +15,8 @@ const HORA_APERTURA  = '09:00';
 const HORA_CIERRE    = '21:00';
 const MAX_HOT_DESK   = 12;
 
+const todayISO = new Date().toISOString().slice(0, 10);
+
 let error: string | null = null;
 let vencidaMiembroId: string | null = null;
 let vencidaNombre: string | null = null;
@@ -67,17 +69,22 @@ if (Astro.request.method === 'POST' && editable) {
         error = 'La sala de juntas ya esta reservada en ese horario.';
       }
     } else if (!error && espacio === 'hot_desk') {
+      // Las membresías son individuales: si hay miembro, siempre ocupa 1 lugar
+      const personasNuevas = miembroId ? 1 : Math.max(1, Number(form.get('capacidad') ?? 1) || 1);
       const row = await db
         .prepare(
-          `SELECT COUNT(*) as cnt FROM reservas_cowork
+          `SELECT COALESCE(SUM(COALESCE(capacidad, 1)), 0) as ocupados FROM reservas_cowork
            WHERE fecha = ? AND espacio = 'hot_desk'
              AND hora_inicio < ? AND hora_fin > ?`
         )
         .bind(fecha, horaFin, horaInicio)
         .first<any>();
-      const ocupados = row?.cnt ?? 0;
-      if (ocupados >= MAX_HOT_DESK) {
-        error = `Aforo completo (${MAX_HOT_DESK}/${MAX_HOT_DESK} lugares en ese horario).`;
+      const ocupados = row?.ocupados ?? 0;
+      if (ocupados + personasNuevas > MAX_HOT_DESK) {
+        const libres = MAX_HOT_DESK - ocupados;
+        error = libres <= 0
+          ? `Aforo completo — no hay lugares disponibles en ese horario.`
+          : `Solo quedan ${libres} lugar${libres !== 1 ? 'es' : ''} en ese horario (máx ${MAX_HOT_DESK}).`;
       }
     }
   }
@@ -87,12 +94,8 @@ if (Astro.request.method === 'POST' && editable) {
       const v = form.get(k);
       return v === null || v === '' ? null : String(v).trim();
     };
-    const num = (k: string) => {
-      const v = form.get(k);
-      if (v === null || v === '') return null;
-      const n = Number(v);
-      return Number.isFinite(n) ? n : null;
-    };
+    // Membresía = individual, siempre 1 persona
+    const capacidadFinal = miembroId ? 1 : (Number(form.get('capacidad') ?? 1) || 1);
     const id = newId();
     const ts = now();
     await db
@@ -102,7 +105,7 @@ if (Astro.request.method === 'POST' && editable) {
           capacidad, notas, created_by, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .bind(id, fecha, horaInicio, horaFin, get('tipo') ?? 'visita', espacio, get('titulo'), get('miembro_id'), get('invitado_libre'), num('capacidad'), get('notas'), user.id, ts, ts)
+      .bind(id, fecha, horaInicio, horaFin, get('tipo') ?? 'visita', espacio, get('titulo'), get('miembro_id'), get('invitado_libre'), capacidadFinal, get('notas'), user.id, ts, ts)
       .run();
     return Astro.redirect(`/district/cowork/${id}`);
   }
@@ -110,7 +113,6 @@ if (Astro.request.method === 'POST' && editable) {
 
 const filtro        = Astro.url.searchParams.get('filtro')  ?? 'proximas';
 const espacioFiltro = Astro.url.searchParams.get('espacio') ?? '';
-const todayISO      = new Date().toISOString().slice(0, 10);
 
 const where: string[] = [];
 const binds: any[] = [];
@@ -221,8 +223,8 @@ const TIPOS_COWORK = [
             <input class="input" name="invitado_libre" />
           </div>
           <div class="col">
-            <label class="label">Personas</label>
-            <input class="input" type="number" name="capacidad" min="1" max={MAX_HOT_DESK} placeholder={`max ${MAX_HOT_DESK}`} />
+            <label class="label">Personas <small class="text-muted">(miembro = 1)</small></label>
+            <input class="input" type="number" name="capacidad" min="1" max={MAX_HOT_DESK} placeholder={`max ${MAX_HOT_DESK}`} id="capacidad_input" />
           </div>
         </div>
         <label class="label">Notas</label>

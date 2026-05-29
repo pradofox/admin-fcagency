@@ -1,0 +1,248 @@
+---
+import Layout from '../../components/Layout.astro';
+import { requireUser, canEdit } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { formatFecha } from '../../lib/fechas';
+
+const user     = requireUser(Astro);
+const editable = canEdit(user);
+const db       = getDB(Astro);
+const { id }   = Astro.params;
+
+let error:  string | null = null;
+let msgOk:  string | null = null;
+
+if (Astro.request.method === 'POST' && editable) {
+  const form   = await Astro.request.formData();
+  const action = form.get('_action') as string;
+  const get    = (k: string) => { const v = form.get(k); return v === null || v === '' ? null : String(v).trim(); };
+
+  if (action === 'edit_cliente') {
+    const nombre = get('nombre');
+    if (!nombre) { error = 'El nombre es obligatorio.'; }
+    else {
+      await db
+        .prepare(`UPDATE clientes SET nombre=?, email=?, whatsapp=?, empresa=?, notas=?, marca_id=?,
+                         rfc=?, razon_social=?, regimen_fiscal=?, uso_cfdi=?, direccion_fiscal=?,
+                         updated_at=? WHERE id=?`)
+        .bind(nombre, get('email'), get('whatsapp'), get('empresa'), get('notas'), get('marca_id'),
+              get('rfc'), get('razon_social'), get('regimen_fiscal'), get('uso_cfdi'), get('direccion_fiscal'),
+              now(), id)
+        .run();
+      msgOk = 'Cliente actualizado.';
+    }
+  }
+}
+
+const cliente = await db.prepare('SELECT * FROM clientes WHERE id = ?').bind(id).first<any>();
+if (!cliente) return Astro.redirect('/clientes');
+
+const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<any>()).results ?? [];
+
+const { results: producciones } = await db
+  .prepare(
+    `SELECT p.id, p.titulo, p.fecha_inicio, p.estado, p.pago_cliente_estado,
+            COALESCE(SUM(lp.cobro_cliente), 0) as total
+     FROM producciones p
+     LEFT JOIN lineas_produccion lp ON lp.produccion_id = p.id AND lp.estado != 'cancelado'
+     WHERE p.cliente_id = ?
+     GROUP BY p.id
+     ORDER BY p.fecha_inicio DESC`
+  )
+  .bind(id).all<any>();
+
+const totalCobrado   = (producciones ?? []).reduce((s: number, p: any) => s + (p.total ?? 0), 0);
+const totalPagado    = (producciones ?? [])
+  .filter((p: any) => p.pago_cliente_estado === 'pagado')
+  .reduce((s: number, p: any) => s + (p.total ?? 0), 0);
+
+const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
+---
+
+<Layout title={cliente.nombre} pageTitle="Clientes">
+  <div class="page-head">
+    <div>
+      <h1 style="margin:0">{cliente.nombre}</h1>
+      <div class="card-meta" style="margin-top:4px">
+        {cliente.empresa && <span class="chip">{cliente.empresa}</span>}
+        {cliente.email && <span class="text-muted">{cliente.email}</span>}
+        {cliente.whatsapp && <span class="text-muted">{cliente.whatsapp}</span>}
+        {cliente.es_frecuente ? <span class="chip chip-ok">★ frecuente</span> : null}
+      </div>
+    </div>
+    <a href="/clientes" class="btn btn-sm">Volver</a>
+  </div>
+
+  {error && <p class="text-danger" style="margin-bottom:16px">{error}</p>}
+  {msgOk && <p class="text-ok"    style="margin-bottom:16px">{msgOk}</p>}
+
+  {/* ── Stats ── */}
+  <div class="row" style="margin-bottom:28px">
+    <div class="col card">
+      <div class="card-meta">Producciones</div>
+      <div class="card-title mono">{producciones?.length ?? 0}</div>
+    </div>
+    <div class="col card" style="border-left:3px solid var(--gold)">
+      <div class="card-meta">Total cotizado</div>
+      <div class="card-title mono" style="color:var(--gold)">{fmt(totalCobrado)}</div>
+    </div>
+    <div class="col card" style="border-left:3px solid var(--text-ok,#4ade80)">
+      <div class="card-meta">Total cobrado</div>
+      <div class="card-title mono text-ok">{fmt(totalPagado)}</div>
+    </div>
+  </div>
+
+  {/* ── Producciones ── */}
+  {(producciones?.length ?? 0) > 0 && (
+    <div style="margin-bottom:32px">
+      <h2 style="margin-bottom:12px">Producciones</h2>
+      <div class="table-card">
+        <table>
+          <thead>
+            <tr><th>Producción</th><th>Fecha</th><th>Estado</th><th class="right">Total</th><th>Pago</th></tr>
+          </thead>
+          <tbody>
+            {(producciones as any[]).map((p) => (
+              <tr>
+                <td><a href={`/producciones/${p.id}`} style="color:inherit;font-weight:500">{p.titulo}</a></td>
+                <td class="mono text-muted">{formatFecha(p.fecha_inicio)}</td>
+                <td><span class="chip">{p.estado}</span></td>
+                <td class="right mono" style="color:var(--gold)">{fmt(p.total)}</td>
+                <td>
+                  <span class={`chip ${p.pago_cliente_estado === 'pagado' ? 'chip-ok' : ''}`}>
+                    {p.pago_cliente_estado ?? 'pendiente'}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )}
+
+  {/* ── Datos fiscales (mostrar si existen) ── */}
+  {(cliente.rfc || cliente.razon_social) && (
+    <div class="card" style="margin-bottom:24px">
+      <div style="font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--gold);margin-bottom:10px">Datos fiscales</div>
+      <div class="row">
+        {cliente.rfc && (
+          <div class="col">
+            <div class="card-meta">RFC</div>
+            <div class="mono" style="font-size:14px">{cliente.rfc}</div>
+          </div>
+        )}
+        {cliente.razon_social && (
+          <div class="col" style="flex:2">
+            <div class="card-meta">Razón social</div>
+            <div style="font-size:14px">{cliente.razon_social}</div>
+          </div>
+        )}
+      </div>
+      {(cliente.regimen_fiscal || cliente.uso_cfdi) && (
+        <div class="row" style="margin-top:10px">
+          {cliente.regimen_fiscal && (
+            <div class="col">
+              <div class="card-meta">Régimen fiscal</div>
+              <div style="font-size:13px">{cliente.regimen_fiscal}</div>
+            </div>
+          )}
+          {cliente.uso_cfdi && (
+            <div class="col">
+              <div class="card-meta">Uso CFDI</div>
+              <div style="font-size:13px">{cliente.uso_cfdi}</div>
+            </div>
+          )}
+        </div>
+      )}
+      {cliente.direccion_fiscal && (
+        <div style="margin-top:10px">
+          <div class="card-meta">Dirección fiscal</div>
+          <div style="font-size:13px;white-space:pre-wrap">{cliente.direccion_fiscal}</div>
+        </div>
+      )}
+    </div>
+  )}
+
+  {/* ── Editar datos ── */}
+  {editable && (
+    <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:24px">
+      <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">Editar cliente</summary>
+      <form method="POST" action={`/clientes/${id}`} style="margin-top:16px">
+        <input type="hidden" name="_action" value="edit_cliente" />
+
+        <div class="row">
+          <div class="col" style="flex:2">
+            <label class="label">Nombre / Empresa *</label>
+            <input class="input" name="nombre" value={cliente.nombre} required />
+          </div>
+          <div class="col">
+            <label class="label">Empresa</label>
+            <input class="input" name="empresa" value={cliente.empresa ?? ''} />
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <label class="label">Email</label>
+            <input class="input" type="email" name="email" value={cliente.email ?? ''} />
+          </div>
+          <div class="col">
+            <label class="label">WhatsApp</label>
+            <input class="input" name="whatsapp" value={cliente.whatsapp ?? ''} />
+          </div>
+          <div class="col">
+            <label class="label">Marca asociada</label>
+            <select class="select" name="marca_id">
+              <option value="">— sin asignar —</option>
+              {marcas.map((m: any) => <option value={m.id} selected={cliente.marca_id === m.id}>{m.nombre}</option>)}
+            </select>
+          </div>
+        </div>
+        <label class="label">Notas</label>
+        <textarea class="textarea" name="notas">{cliente.notas ?? ''}</textarea>
+
+        {/* Datos fiscales */}
+        <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
+          <div style="font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--gold);margin-bottom:12px">Datos fiscales</div>
+          <div class="row">
+            <div class="col">
+              <label class="label">RFC</label>
+              <input class="input" name="rfc" value={cliente.rfc ?? ''} placeholder="XAXX010101000" style="text-transform:uppercase" />
+            </div>
+            <div class="col" style="flex:2">
+              <label class="label">Razón social</label>
+              <input class="input" name="razon_social" value={cliente.razon_social ?? ''} placeholder="Nombre tal como aparece en el SAT" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="col">
+              <label class="label">Régimen fiscal</label>
+              <input class="input" name="regimen_fiscal" value={cliente.regimen_fiscal ?? ''} placeholder="Ej. 626 - RESICO" list="regimenes_cli" />
+              <datalist id="regimenes_cli">
+                <option value="601 - General de Ley Personas Morales" />
+                <option value="612 - Personas Físicas con Actividades Empresariales" />
+                <option value="616 - Sin obligaciones fiscales" />
+                <option value="621 - Incorporación Fiscal" />
+                <option value="626 - Régimen Simplificado de Confianza (RESICO)" />
+              </datalist>
+            </div>
+            <div class="col">
+              <label class="label">Uso de CFDI</label>
+              <input class="input" name="uso_cfdi" value={cliente.uso_cfdi ?? ''} placeholder="Ej. G03 - Gastos en general" list="cfdi_cli" />
+              <datalist id="cfdi_cli">
+                <option value="G01 - Adquisición de mercancias" />
+                <option value="G03 - Gastos en general" />
+                <option value="I08 - Otra maquinaria y equipo" />
+                <option value="S01 - Sin efectos fiscales" />
+              </datalist>
+            </div>
+          </div>
+          <label class="label">Dirección fiscal</label>
+          <textarea class="textarea" name="direccion_fiscal" rows="2" placeholder="Calle, No., Colonia, CP, Ciudad, Estado">{cliente.direccion_fiscal ?? ''}</textarea>
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="margin-top:16px">Guardar cambios</button>
+      </form>
+    </details>
+  )}
+</Layout>

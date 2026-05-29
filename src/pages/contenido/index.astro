@@ -1,65 +1,684 @@
 ---
 import Layout from '../../components/Layout.astro';
 import EmptyState from '../../components/EmptyState.astro';
-import { requireUser } from '../../lib/session';
-import { getDB } from '../../lib/db';
+import { requireUser, canEdit } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
+import { formatFecha } from '../../lib/fechas';
 
-requireUser(Astro);
+const user = requireUser(Astro);
+const editable = canEdit(user);
 const db = getDB(Astro);
 
-const filtroEstado = Astro.url.searchParams.get('estado') ?? 'todos';
-const estados = ['todos', 'programado', 'En producción', 'En revisión', 'Aprobado', 'Publicado'];
+const FORMATOS   = ['Post estático','Reel','Stories','Carrusel','Video','UGC','Behind the scenes','Encuesta'];
+const PLATAFORMAS = ['Instagram','TikTok','Pinterest','LinkedIn'];
+const PILARES    = ['Inspiración','Educación','Comunidad','Posicionamiento','Conversión'];
+const ESTADOS_PIEZA = ['Pendiente','En producción','En revisión','Aprobado','Publicado'];
+const TIPOS_CAMPANA = ['Lanzamiento de colección','Behind the scenes','Campaña de temporada','Colaboración con influencer','Campaña de ventas','Showcase UGC','Awareness de marca'];
 
-const sql = filtroEstado === 'todos'
-  ? `SELECT id, titulo, marca_id, formato, plataforma, pilar, fecha_programada, fecha_publicada, estado
-     FROM piezas_contenido ORDER BY fecha_programada ASC NULLS LAST LIMIT 200`
-  : `SELECT id, titulo, marca_id, formato, plataforma, pilar, fecha_programada, fecha_publicada, estado
-     FROM piezas_contenido WHERE estado = ? ORDER BY fecha_programada ASC NULLS LAST LIMIT 200`;
-const stmt = filtroEstado === 'todos' ? db.prepare(sql) : db.prepare(sql).bind(filtroEstado);
-const { results } = await stmt.all<any>();
+let msgOk: string | null = null;
+let msgErr: string | null = null;
+
+if (Astro.request.method === 'POST' && editable) {
+  const form   = await Astro.request.formData();
+  const action = form.get('_action') as string;
+  const get    = (k: string) => { const v = form.get(k); return v === null || v === '' ? null : String(v).trim(); };
+
+  if (action === 'add_pieza') {
+    const titulo = get('titulo');
+    if (!titulo) { msgErr = 'El título es obligatorio.'; }
+    else {
+      const ts = now();
+      await db.prepare(
+        `INSERT INTO piezas_contenido (id, marca_id, titulo, formato, plataforma, pilar, fecha_programada, estado, notas, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(newId(), get('marca_id'), titulo, get('formato'), get('plataforma'), get('pilar'), get('fecha_programada'), get('estado') ?? 'Pendiente', get('notas'), ts, ts).run();
+      msgOk = 'Pieza creada.';
+    }
+  }
+
+  if (action === 'update_estado') {
+    const pieceId = get('pieza_id');
+    const estado  = get('estado');
+    if (pieceId && estado) {
+      const extra = estado === 'Publicado' ? ', fecha_publicada = date(\'now\')' : '';
+      await db.prepare(`UPDATE piezas_contenido SET estado = ?${extra}, updated_at = ? WHERE id = ?`).bind(estado, now(), pieceId).run();
+    }
+    return Astro.redirect('/contenido?tab=piezas');
+  }
+
+  if (action === 'delete_pieza') {
+    await db.prepare('DELETE FROM piezas_contenido WHERE id = ?').bind(get('pieza_id')).run();
+    return Astro.redirect('/contenido?tab=piezas');
+  }
+
+  if (action === 'add_campana') {
+    const nombre = get('nombre');
+    if (!nombre) { msgErr = 'El nombre es obligatorio.'; }
+    else {
+      const ts = now();
+      await db.prepare(
+        `INSERT INTO campanas (id, nombre, marca_id, tipo, fecha_inicio, fecha_fin, objetivo, estado, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'Activa', ?, ?, ?)`
+      ).bind(newId(), nombre, get('marca_id'), get('tipo'), get('fecha_inicio'), get('fecha_fin'), get('objetivo'), user.id, ts, ts).run();
+      msgOk = 'Campaña creada.';
+    }
+  }
+
+  if (action === 'update_campana_estado') {
+    await db.prepare('UPDATE campanas SET estado = ?, updated_at = ? WHERE id = ?').bind(get('estado'), now(), get('campana_id')).run();
+    return Astro.redirect('/contenido?tab=campanas');
+  }
+
+  if (action === 'delete_campana') {
+    await db.prepare('DELETE FROM campanas WHERE id = ?').bind(get('campana_id')).run();
+    return Astro.redirect('/contenido?tab=campanas');
+  }
+
+  if (action === 'add_kpi') {
+    const fecha = get('fecha');
+    const marcaId = get('marca_id');
+    if (!fecha || !marcaId) { msgErr = 'Fecha y marca son obligatorios.'; }
+    else {
+      const num = (k: string) => { const v = form.get(k); if (!v || v === '') return null; const n = Number(v); return isFinite(n) ? n : null; };
+      await db.prepare(
+        `INSERT INTO kpis_redes (id, fecha, marca_id, alcance, engagement_pct, seguidores_nuevos, guardados, dms, notas, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(newId(), fecha, marcaId, num('alcance'), num('engagement_pct'), num('seguidores_nuevos'), num('guardados'), num('dms'), get('notas'), user.id, now()).run();
+      msgOk = 'Métricas registradas.';
+    }
+  }
+
+  if (action === 'delete_kpi') {
+    await db.prepare('DELETE FROM kpis_redes WHERE id = ?').bind(get('kpi_id')).run();
+    return Astro.redirect('/contenido?tab=kpis');
+  }
+}
+
+const tab = Astro.url.searchParams.get('tab') ?? 'piezas';
+const filtroMarca  = Astro.url.searchParams.get('marca')  ?? '';
+const filtroEstado = Astro.url.searchParams.get('estado') ?? '';
+const filtroFormato = Astro.url.searchParams.get('formato') ?? '';
+
+// ── Marcas ────────────────────────────────────────────────────────────────────
+const { results: marcas } = await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<any>();
+
+// ── Piezas ────────────────────────────────────────────────────────────────────
+const piezasWhere: string[] = [];
+const piezasBinds: any[] = [];
+if (filtroMarca)  { piezasWhere.push('p.marca_id = ?'); piezasBinds.push(filtroMarca); }
+if (filtroEstado) { piezasWhere.push('p.estado = ?');   piezasBinds.push(filtroEstado); }
+if (filtroFormato){ piezasWhere.push('p.formato = ?');  piezasBinds.push(filtroFormato); }
+
+const { results: piezas } = await db.prepare(
+  `SELECT p.*, m.nombre as marca_nombre
+   FROM piezas_contenido p
+   LEFT JOIN marcas m ON m.id = p.marca_id
+   ${piezasWhere.length ? 'WHERE ' + piezasWhere.join(' AND ') : ''}
+   ORDER BY p.fecha_programada ASC NULLS LAST, p.created_at DESC LIMIT 300`
+).bind(...piezasBinds).all<any>();
+
+// ── Stats globales ────────────────────────────────────────────────────────────
+const hoyISO  = new Date().toISOString().slice(0, 10);
+const mesISO  = hoyISO.slice(0, 7);  // YYYY-MM
+
+const { results: allPiezas } = await db.prepare('SELECT estado, fecha_programada, pilar FROM piezas_contenido').all<any>();
+const piezasEsteMes   = (allPiezas ?? []).filter((p: any) => (p.fecha_programada ?? '').startsWith(mesISO));
+const piezasPublicadas = piezasEsteMes.filter((p: any) => p.estado === 'Publicado');
+const piezasPendientes = (allPiezas ?? []).filter((p: any) => p.estado === 'Pendiente' || p.estado === 'En revisión');
+const pctPublicado    = piezasEsteMes.length ? Math.round(piezasPublicadas.length / piezasEsteMes.length * 100) : 0;
+
+// ── Campañas ──────────────────────────────────────────────────────────────────
+const campWhere: string[] = [];
+const campBinds: any[] = [];
+if (filtroMarca) { campWhere.push('c.marca_id = ?'); campBinds.push(filtroMarca); }
+
+const { results: campanas } = await db.prepare(
+  `SELECT c.*, m.nombre as marca_nombre
+   FROM campanas c LEFT JOIN marcas m ON m.id = c.marca_id
+   ${campWhere.length ? 'WHERE ' + campWhere.join(' AND ') : ''}
+   ORDER BY c.fecha_inicio DESC LIMIT 100`
+).bind(...campBinds).all<any>();
+
+const campanasActivas = (campanas ?? []).filter((c: any) => c.estado === 'Activa').length;
+
+// ── KPIs ──────────────────────────────────────────────────────────────────────
+const kpiWhere: string[] = [];
+const kpiBinds: any[] = [];
+if (filtroMarca) { kpiWhere.push('k.marca_id = ?'); kpiBinds.push(filtroMarca); }
+
+const { results: kpis } = await db.prepare(
+  `SELECT k.*, m.nombre as marca_nombre
+   FROM kpis_redes k LEFT JOIN marcas m ON m.id = k.marca_id
+   ${kpiWhere.length ? 'WHERE ' + kpiWhere.join(' AND ') : ''}
+   ORDER BY k.fecha DESC LIMIT 100`
+).bind(...kpiBinds).all<any>();
+
+const kpisMes = (kpis ?? []).filter((k: any) => (k.fecha ?? '').startsWith(mesISO));
+const engProm = kpisMes.length ? (kpisMes.reduce((s: number, k: any) => s + (k.engagement_pct ?? 0), 0) / kpisMes.length) : null;
+const alcanceMes = kpisMes.reduce((s: number, k: any) => s + (k.alcance ?? 0), 0);
+const segMes     = kpisMes.reduce((s: number, k: any) => s + (k.seguidores_nuevos ?? 0), 0);
+
+// ── Pilares análisis ──────────────────────────────────────────────────────────
+const pilarCount: Record<string, number> = {};
+for (const p of (allPiezas ?? [])) { if (p.pilar) pilarCount[p.pilar] = (pilarCount[p.pilar] ?? 0) + 1; }
+const totalPilares = Object.values(pilarCount).reduce((a, b) => a + b, 0);
 
 const chipEstado: Record<string, string> = {
-  programado: 'chip',
-  'En producción': 'chip-warning',
-  'En revisión': 'chip-warning',
-  Aprobado: 'chip-gold',
-  Publicado: 'chip-ok'
+  Pendiente: '', 'En producción': 'chip-warning', 'En revisión': 'chip-warning',
+  Aprobado: '', Publicado: 'chip-ok'
 };
+const chipCampana: Record<string, string> = {
+  Activa: 'chip-ok', Pausada: 'chip-warning', Completada: '', Cancelada: 'chip-danger'
+};
+
+function buildUrl(overrides: Record<string, string | undefined>) {
+  const p = new URLSearchParams();
+  if (tab !== 'piezas') p.set('tab', tab);
+  if (filtroMarca)   p.set('marca', filtroMarca);
+  if (filtroEstado)  p.set('estado', filtroEstado);
+  if (filtroFormato) p.set('formato', filtroFormato);
+  for (const k in overrides) {
+    const v = overrides[k];
+    if (!v) p.delete(k); else p.set(k, v);
+  }
+  return `/contenido${p.toString() ? '?' + p.toString() : ''}`;
+}
 ---
 
-<Layout title="Contenido" pageTitle="Contenido">
+<Layout title="Redes Sociales" pageTitle="Redes Sociales">
   <div class="page-head">
-    <h1>Contenido</h1>
+    <h1>Redes Sociales</h1>
+    <a href="/briefs/nuevo" class="btn btn-primary btn-sm">+ Nuevo brief</a>
   </div>
 
-  <p class="text-muted" style="font-size:12px;margin-bottom:24px">
-    Las piezas de contenido se crean automáticamente al guardar un brief con fecha de publicación.
-    Edita el brief para modificar sus piezas.
-  </p>
+  {msgOk  && <p class="text-ok"     style="margin-bottom:16px">{msgOk}</p>}
+  {msgErr && <p class="text-danger" style="margin-bottom:16px">{msgErr}</p>}
 
-  <div class="filters">
-    {estados.map((e) => (
-      <a href={`/contenido?estado=${e}`} class={`filter-chip ${filtroEstado === e ? 'active' : ''}`}>{e}</a>
+  {/* ── Stats ── */}
+  <div class="row" style="margin-bottom:24px">
+    <div class="col card">
+      <div class="card-meta">Piezas este mes</div>
+      <div class="card-title mono" style="color:var(--gold)">{piezasEsteMes.length}</div>
+      <div style="margin-top:6px;background:var(--bg-3,#1a1a1a);border-radius:3px;height:4px;overflow:hidden">
+        <div style={`background:var(--gold);height:4px;width:${pctPublicado}%`}></div>
+      </div>
+      <small class="text-muted">{pctPublicado}% publicado</small>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Pendientes revisión</div>
+      <div class="card-title mono" style="color:#e9b949">{piezasPendientes.length}</div>
+      <small class="text-muted">Pendiente + En revisión</small>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Campañas activas</div>
+      <div class="card-title mono text-ok">{campanasActivas}</div>
+      <small class="text-muted">{(campanas ?? []).length} total</small>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Engagement prom. (mes)</div>
+      <div class="card-title mono" style="color:var(--gold)">
+        {engProm != null ? `${engProm.toFixed(1)}%` : '—'}
+      </div>
+      {alcanceMes > 0 && <small class="text-muted">Alcance: {alcanceMes.toLocaleString('es-MX')}</small>}
+    </div>
+  </div>
+
+  {/* ── Filtro por marca (persiste entre tabs) ── */}
+  <div class="filters" style="margin-bottom:8px">
+    <a href={buildUrl({ marca: undefined })} class={`filter-chip ${!filtroMarca ? 'active' : ''}`}>Todas las marcas</a>
+    {marcas?.map((m: any) => (
+      <a href={buildUrl({ marca: m.id })} class={`filter-chip ${filtroMarca === m.id ? 'active' : ''}`}>{m.nombre}</a>
     ))}
   </div>
 
-  {results && results.length > 0 ? (
-    <div class="grid">
-      {results.map((p: any) => (
-        <article class="card">
-          <div class="card-title" style="font-size:14px">{p.titulo}</div>
-          <div class="card-meta">
-            <span class={`chip ${chipEstado[p.estado] ?? ''}`}>{p.estado}</span>
-            {p.marca_id && <span>{p.marca_id}</span>}
-            {p.formato && <span>{p.formato}</span>}
-            {p.plataforma && <span>{p.plataforma}</span>}
-            {p.pilar && <span>{p.pilar}</span>}
-            {p.fecha_programada && <span class="text-muted">{p.fecha_programada}</span>}
-          </div>
-        </article>
-      ))}
+  {/* ── Tabs ── */}
+  <div class="filters" style="margin-bottom:24px">
+    <a href={buildUrl({ tab: 'piezas' })} class={`filter-chip ${tab === 'piezas' ? 'active' : ''}`}>
+      Piezas {(piezas ?? []).length > 0 ? `(${piezas!.length})` : ''}
+    </a>
+    <a href={buildUrl({ tab: 'campanas' })} class={`filter-chip ${tab === 'campanas' ? 'active' : ''}`}>
+      Campañas {(campanas ?? []).length > 0 ? `(${campanas!.length})` : ''}
+    </a>
+    <a href={buildUrl({ tab: 'kpis' })} class={`filter-chip ${tab === 'kpis' ? 'active' : ''}`}>
+      KPIs {kpis?.length ? `(${kpis.length})` : ''}
+    </a>
+    <a href={buildUrl({ tab: 'estrategia' })} class={`filter-chip ${tab === 'estrategia' ? 'active' : ''}`}>Estrategia</a>
+  </div>
+
+  {/* ═══════════════════════════════════════════════════════════════════ PIEZAS */}
+  {tab === 'piezas' && (
+    <div>
+      {/* Sub-filtros */}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <select class="select" style="width:auto;font-size:12px" onchange={`location.href='/contenido?tab=piezas${filtroMarca ? '&marca=' + filtroMarca : ''}' + (this.value ? '&estado=' + this.value : '')`}>
+          <option value="">Todos los estados</option>
+          {ESTADOS_PIEZA.map((e) => <option value={e} selected={filtroEstado === e}>{e}</option>)}
+        </select>
+        <select class="select" style="width:auto;font-size:12px" onchange={`location.href='/contenido?tab=piezas${filtroMarca ? '&marca=' + filtroMarca : ''}${filtroEstado ? '&estado=' + filtroEstado : ''}' + (this.value ? '&formato=' + this.value : '')`}>
+          <option value="">Todos los formatos</option>
+          {FORMATOS.map((f) => <option value={f} selected={filtroFormato === f}>{f}</option>)}
+        </select>
+        {(filtroEstado || filtroFormato) && (
+          <a href={buildUrl({ estado: undefined, formato: undefined })} class="btn btn-sm">✕ Limpiar</a>
+        )}
+      </div>
+
+      {piezas && piezas.length > 0 ? (
+        <div class="table-card" style="margin-bottom:24px">
+          <table>
+            <thead>
+              <tr>
+                <th>Pieza</th><th>Marca</th><th>Formato</th><th>Plataforma</th>
+                <th>Pilar</th><th>Fecha pub.</th><th>Estado</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {piezas.map((p: any) => (
+                <tr>
+                  <td style="max-width:220px"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500">{p.titulo}</div></td>
+                  <td class="text-muted" style="font-size:12px">{p.marca_nombre ?? p.marca_id ?? '—'}</td>
+                  <td class="text-muted" style="font-size:12px">{p.formato ?? '—'}</td>
+                  <td class="text-muted" style="font-size:12px">{p.plataforma ?? '—'}</td>
+                  <td><span class="chip" style="font-size:10px">{p.pilar ?? '—'}</span></td>
+                  <td class="mono" style="font-size:12px">{p.fecha_programada ? formatFecha(p.fecha_programada) : '—'}</td>
+                  <td>
+                    {editable ? (
+                      <form method="POST" action="/contenido" style="display:inline">
+                        <input type="hidden" name="_action" value="update_estado" />
+                        <input type="hidden" name="pieza_id" value={p.id} />
+                        <select name="estado" class="select" style="width:auto;font-size:11px;padding:2px 6px"
+                                onchange="this.form.submit()">
+                          {ESTADOS_PIEZA.map((e) => <option value={e} selected={p.estado === e}>{e}</option>)}
+                        </select>
+                      </form>
+                    ) : (
+                      <span class={`chip ${chipEstado[p.estado] ?? ''}`}>{p.estado}</span>
+                    )}
+                  </td>
+                  <td>
+                    {editable && (
+                      <form method="POST" action="/contenido" style="display:inline"
+                            onsubmit="return confirm('¿Eliminar esta pieza?')">
+                        <input type="hidden" name="_action" value="delete_pieza" />
+                        <input type="hidden" name="pieza_id" value={p.id} />
+                        <button type="submit" class="btn btn-sm btn-danger">✕</button>
+                      </form>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <EmptyState title="Sin piezas" message="Crea un brief para generar piezas automáticamente, o agrega una manual." />
+      )}
+
+      {/* Análisis de pilares */}
+      {totalPilares > 0 && (
+        <div class="card" style="margin-bottom:24px">
+          <div class="card-meta" style="margin-bottom:12px">Distribución por pilar</div>
+          {PILARES.map((pilar) => {
+            const cnt = pilarCount[pilar] ?? 0;
+            const pct = totalPilares ? Math.round(cnt / totalPilares * 100) : 0;
+            return (
+              <div style="margin-bottom:8px">
+                <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px">
+                  <span>{pilar}</span>
+                  <span class="mono">{cnt} · {pct}%</span>
+                </div>
+                <div style="background:var(--bg-3,#1a1a1a);border-radius:3px;height:5px">
+                  <div style={`background:var(--gold);height:5px;width:${pct}%;border-radius:3px`}></div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Agregar pieza manual */}
+      {editable && (
+        <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px">
+          <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Nueva pieza manual</summary>
+          <form method="POST" action="/contenido" style="margin-top:16px">
+            <input type="hidden" name="_action" value="add_pieza" />
+            <label class="label">Título *</label>
+            <input class="input" name="titulo" required placeholder="Ej. Reel Look SS26" />
+            <div class="row">
+              <div class="col">
+                <label class="label">Marca</label>
+                <select class="select" name="marca_id">
+                  <option value="">— sin asignar —</option>
+                  {marcas?.map((m: any) => <option value={m.id}>{m.nombre}</option>)}
+                </select>
+              </div>
+              <div class="col">
+                <label class="label">Formato</label>
+                <select class="select" name="formato">
+                  <option value="">—</option>
+                  {FORMATOS.map((f) => <option value={f}>{f}</option>)}
+                </select>
+              </div>
+              <div class="col">
+                <label class="label">Plataforma</label>
+                <select class="select" name="plataforma">
+                  <option value="">—</option>
+                  {PLATAFORMAS.map((p) => <option value={p}>{p}</option>)}
+                </select>
+              </div>
+              <div class="col">
+                <label class="label">Pilar</label>
+                <select class="select" name="pilar">
+                  <option value="">—</option>
+                  {PILARES.map((p) => <option value={p}>{p}</option>)}
+                </select>
+              </div>
+            </div>
+            <div class="row">
+              <div class="col">
+                <label class="label">Fecha programada</label>
+                <input class="input" type="date" name="fecha_programada" />
+              </div>
+              <div class="col">
+                <label class="label">Estado inicial</label>
+                <select class="select" name="estado">
+                  {ESTADOS_PIEZA.map((e) => <option value={e}>{e}</option>)}
+                </select>
+              </div>
+            </div>
+            <label class="label">Notas</label>
+            <textarea class="textarea" name="notas" rows={2}></textarea>
+            <button type="submit" class="btn btn-primary" style="margin-top:12px">Crear pieza</button>
+          </form>
+        </details>
+      )}
     </div>
-  ) : (
-    <EmptyState title="Sin piezas" message="No hay piezas de contenido todavía. Crea un brief con fecha de publicación para generar la primera." />
+  )}
+
+  {/* ══════════════════════════════════════════════════════════════════ CAMPAÑAS */}
+  {tab === 'campanas' && (
+    <div>
+      {campanas && campanas.length > 0 ? (
+        <div class="table-card" style="margin-bottom:24px">
+          <table>
+            <thead>
+              <tr><th>Campaña</th><th>Marca</th><th>Tipo</th><th>Inicio</th><th>Fin</th><th>Estado</th><th></th></tr>
+            </thead>
+            <tbody>
+              {campanas.map((c: any) => (
+                <tr>
+                  <td style="font-weight:500">{c.nombre}</td>
+                  <td class="text-muted" style="font-size:12px">{c.marca_nombre ?? '—'}</td>
+                  <td class="text-muted" style="font-size:12px">{c.tipo ?? '—'}</td>
+                  <td class="mono" style="font-size:12px">{c.fecha_inicio ? formatFecha(c.fecha_inicio) : '—'}</td>
+                  <td class="mono" style="font-size:12px">{c.fecha_fin ? formatFecha(c.fecha_fin) : '—'}</td>
+                  <td>
+                    {editable ? (
+                      <form method="POST" action="/contenido" style="display:inline">
+                        <input type="hidden" name="_action" value="update_campana_estado" />
+                        <input type="hidden" name="campana_id" value={c.id} />
+                        <select name="estado" class="select" style="width:auto;font-size:11px;padding:2px 6px"
+                                onchange="this.form.submit()">
+                          {['Activa','Pausada','Completada','Cancelada'].map((e) => <option value={e} selected={c.estado === e}>{e}</option>)}
+                        </select>
+                      </form>
+                    ) : (
+                      <span class={`chip ${chipCampana[c.estado] ?? ''}`}>{c.estado}</span>
+                    )}
+                  </td>
+                  <td>
+                    {editable && (
+                      <form method="POST" action="/contenido" style="display:inline"
+                            onsubmit="return confirm('¿Eliminar campaña?')">
+                        <input type="hidden" name="_action" value="delete_campana" />
+                        <input type="hidden" name="campana_id" value={c.id} />
+                        <button type="submit" class="btn btn-sm btn-danger">✕</button>
+                      </form>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <EmptyState title="Sin campañas" message="Crea la primera campaña abajo." />
+      )}
+
+      {editable && (
+        <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px">
+          <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Nueva campaña</summary>
+          <form method="POST" action="/contenido" style="margin-top:16px">
+            <input type="hidden" name="_action" value="add_campana" />
+            <div class="row">
+              <div class="col" style="flex:2">
+                <label class="label">Nombre *</label>
+                <input class="input" name="nombre" required placeholder="Ej. Campaña verano 2026" />
+              </div>
+              <div class="col">
+                <label class="label">Marca</label>
+                <select class="select" name="marca_id">
+                  <option value="">— sin asignar —</option>
+                  {marcas?.map((m: any) => <option value={m.id}>{m.nombre}</option>)}
+                </select>
+              </div>
+              <div class="col">
+                <label class="label">Tipo</label>
+                <select class="select" name="tipo">
+                  <option value="">—</option>
+                  {TIPOS_CAMPANA.map((t) => <option value={t}>{t}</option>)}
+                </select>
+              </div>
+            </div>
+            <div class="row">
+              <div class="col">
+                <label class="label">Fecha inicio</label>
+                <input class="input" type="date" name="fecha_inicio" />
+              </div>
+              <div class="col">
+                <label class="label">Fecha fin</label>
+                <input class="input" type="date" name="fecha_fin" />
+              </div>
+              <div class="col" style="flex:2">
+                <label class="label">Objetivo</label>
+                <input class="input" name="objetivo" placeholder="Qué quieres lograr" />
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary" style="margin-top:12px">Crear campaña</button>
+          </form>
+        </details>
+      )}
+    </div>
+  )}
+
+  {/* ══════════════════════════════════════════════════════════════════════ KPIs */}
+  {tab === 'kpis' && (
+    <div>
+      <div class="row" style="margin-bottom:24px">
+        <div class="col card">
+          <div class="card-meta">Engagement rate prom.</div>
+          <div class="card-title mono" style={`color:${engProm != null && engProm >= 3 ? 'var(--text-ok,#4ade80)' : 'var(--danger,#e25555)'}`}>
+            {engProm != null ? `${engProm.toFixed(1)}%` : '—'}
+          </div>
+          <small class="text-muted">{engProm != null && engProm >= 3 ? '✓ meta ≥3%' : 'meta: ≥3%'}</small>
+        </div>
+        <div class="col card">
+          <div class="card-meta">Alcance mensual</div>
+          <div class="card-title mono" style="color:var(--gold)">{alcanceMes > 0 ? alcanceMes.toLocaleString('es-MX') : '—'}</div>
+          <small class="text-muted">cuentas únicas este mes</small>
+        </div>
+        <div class="col card">
+          <div class="card-meta">Seguidores nuevos</div>
+          <div class="card-title mono text-ok">{segMes > 0 ? `+${segMes.toLocaleString('es-MX')}` : '—'}</div>
+          <small class="text-muted">este mes</small>
+        </div>
+        <div class="col card">
+          <div class="card-meta">DMs recibidos</div>
+          <div class="card-title mono" style="color:var(--gold)">
+            {kpisMes.reduce((s: number, k: any) => s + (k.dms ?? 0), 0) || '—'}
+          </div>
+          <small class="text-muted">este mes</small>
+        </div>
+      </div>
+
+      {kpis && kpis.length > 0 ? (
+        <div class="table-card" style="margin-bottom:24px">
+          <table>
+            <thead>
+              <tr>
+                <th>Fecha</th><th>Marca</th>
+                <th class="right">Engagement</th><th class="right">Alcance</th>
+                <th class="right">Seg. nuevos</th><th class="right">Guardados</th>
+                <th class="right">DMs</th><th>Notas</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {kpis.map((k: any) => (
+                <tr>
+                  <td class="mono" style="font-size:12px">{formatFecha(k.fecha)}</td>
+                  <td class="text-muted" style="font-size:12px">{k.marca_nombre ?? '—'}</td>
+                  <td class="right mono">
+                    <span style={k.engagement_pct != null ? (k.engagement_pct >= 3 ? 'color:var(--text-ok,#4ade80)' : 'color:var(--danger,#e25555)') : ''}>
+                      {k.engagement_pct != null ? `${k.engagement_pct}%` : '—'}
+                    </span>
+                  </td>
+                  <td class="right mono" style="font-size:12px">{k.alcance?.toLocaleString('es-MX') ?? '—'}</td>
+                  <td class="right mono" style="font-size:12px">{k.seguidores_nuevos != null ? `+${k.seguidores_nuevos}` : '—'}</td>
+                  <td class="right mono" style="font-size:12px">{k.guardados ?? '—'}</td>
+                  <td class="right mono" style="font-size:12px">{k.dms ?? '—'}</td>
+                  <td class="text-muted" style="font-size:11px;max-width:150px">{k.notas ?? ''}</td>
+                  <td>
+                    {editable && (
+                      <form method="POST" action="/contenido" style="display:inline"
+                            onsubmit="return confirm('¿Eliminar este registro?')">
+                        <input type="hidden" name="_action" value="delete_kpi" />
+                        <input type="hidden" name="kpi_id" value={k.id} />
+                        <button type="submit" class="btn btn-sm btn-danger">✕</button>
+                      </form>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <EmptyState title="Sin métricas" message="Registra las primeras métricas abajo." />
+      )}
+
+      {editable && (
+        <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px">
+          <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Registrar métricas</summary>
+          <form method="POST" action="/contenido" style="margin-top:16px">
+            <input type="hidden" name="_action" value="add_kpi" />
+            <div class="row">
+              <div class="col">
+                <label class="label">Fecha *</label>
+                <input class="input" type="date" name="fecha" required />
+              </div>
+              <div class="col">
+                <label class="label">Marca *</label>
+                <select class="select" name="marca_id" required>
+                  <option value="">— elige —</option>
+                  {marcas?.map((m: any) => <option value={m.id}>{m.nombre}</option>)}
+                </select>
+              </div>
+              <div class="col">
+                <label class="label">Engagement rate (%)</label>
+                <input class="input" type="number" step="0.1" name="engagement_pct" placeholder="Ej. 3.5" />
+              </div>
+              <div class="col">
+                <label class="label">Alcance</label>
+                <input class="input" type="number" name="alcance" placeholder="Cuentas únicas" />
+              </div>
+            </div>
+            <div class="row">
+              <div class="col">
+                <label class="label">Seguidores nuevos</label>
+                <input class="input" type="number" name="seguidores_nuevos" />
+              </div>
+              <div class="col">
+                <label class="label">Guardados</label>
+                <input class="input" type="number" name="guardados" />
+              </div>
+              <div class="col">
+                <label class="label">DMs recibidos</label>
+                <input class="input" type="number" name="dms" />
+              </div>
+              <div class="col">
+                <label class="label">Notas</label>
+                <input class="input" name="notas" placeholder="Observaciones" />
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary" style="margin-top:12px">Registrar</button>
+          </form>
+        </details>
+      )}
+    </div>
+  )}
+
+  {/* ══════════════════════════════════════════════════════════════════ ESTRATEGIA */}
+  {tab === 'estrategia' && (
+    <div>
+      <div class="row" style="margin-bottom:24px">
+        <div class="col card">
+          <div class="card-meta" style="margin-bottom:10px">Frecuencia recomendada</div>
+          {[
+            { marca: 'FC Agency',       freq: 'Post 3x · Reel 2x · Stories diario' },
+            { marca: 'AleaModa',        freq: 'Post 3x · Reel 3x · Stories diario' },
+            { marca: 'District Studio', freq: 'Post 2x · Reel 2x · Stories diario' },
+            { marca: 'FC Line',         freq: 'Post 3x · Reel 2x · Stories diario' },
+          ].map(({ marca, freq }) => (
+            <div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--border)">
+              <div style="font-size:12px;font-weight:600;color:var(--gold)">{marca}</div>
+              <div class="text-muted" style="font-size:11px">{freq}</div>
+            </div>
+          ))}
+        </div>
+        <div class="col card">
+          <div class="card-meta" style="margin-bottom:10px">Flujo de trabajo — tiempos máximos</div>
+          {[
+            ['Brief al creador',     '72h antes de publicación'],
+            ['Entrega del creador',  '48h hábiles'],
+            ['Revisión QC',          '24h'],
+            ['Visto bueno',          '12h'],
+            ['Calendarización',      '24h'],
+          ].map(([step, time]) => (
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:12px">
+              <span class="text-muted">{step}</span>
+              <span class="mono" style="color:var(--gold)">{time}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <h2 style="margin-bottom:16px">Pilares de contenido</h2>
+      <div class="grid">
+        {[
+          { pilar: 'Inspiración',    pct: 30, desc: 'Editoriales, looks, tendencias' },
+          { pilar: 'Educación',      pct: 25, desc: 'Tips, tutoriales, BTS, procesos' },
+          { pilar: 'Comunidad',      pct: 20, desc: 'Testimonios, UGC, shoutouts' },
+          { pilar: 'Posicionamiento',pct: 15, desc: 'Logros, casos de éxito, valores' },
+          { pilar: 'Conversión',     pct: 10, desc: 'Promociones, lanzamientos, CTAs' },
+        ].map(({ pilar, pct, desc }) => (
+          <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:baseline">
+              <div style="font-weight:600;font-size:14px">{pilar}</div>
+              <div class="mono" style="color:var(--gold);font-size:18px">{pct}%</div>
+            </div>
+            <p class="text-muted" style="font-size:12px;margin-top:4px">{desc}</p>
+            <div style="margin-top:8px;background:var(--bg-3,#1a1a1a);border-radius:3px;height:4px">
+              <div style={`background:var(--gold);height:4px;width:${pct}%;border-radius:3px`}></div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <h2 style="margin:24px 0 12px">Formatos disponibles</h2>
+      <div class="filters">
+        {FORMATOS.map((f) => <span class="chip">{f}</span>)}
+      </div>
+    </div>
   )}
 </Layout>

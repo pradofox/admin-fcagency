@@ -1,0 +1,610 @@
+---
+import Layout from '../../components/Layout.astro';
+import { requireUser, canEdit } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
+import { formatFecha } from '../../lib/fechas';
+
+const user = requireUser(Astro);
+const editable = canEdit(user);
+const db = getDB(Astro);
+const { id } = Astro.params;
+
+let error: string | null = null;
+let msgOk: string | null = null;
+
+const ROLES = [
+  'Fotografía', 'Video', 'Modelo', 'Maquillaje', 'Peinado', 'Styling',
+  'Producción', 'Arte / Set', 'Locación', 'Catering', 'Transporte',
+  'Pantallas', 'Audio', 'Iluminación', 'Operación', 'Montaje', 'Desmontaje',
+  'Estudio', 'Day pass', 'Espacio', 'Otro'
+];
+
+if (Astro.request.method === 'POST' && editable) {
+  const form   = await Astro.request.formData();
+  const action = form.get('_action') as string;
+
+  // ── Cambiar estado ─────────────────────────────────────────────────────────
+  if (action === 'set_estado') {
+    const estado = form.get('estado') as string;
+    await db.prepare('UPDATE cotizaciones SET estado = ?, updated_at = ? WHERE id = ?').bind(estado, now(), id).run();
+    return Astro.redirect(`/cotizaciones/${id}`);
+  }
+
+  // ── Agregar concepto del catálogo ──────────────────────────────────────────
+  // Trae el reparto real del concepto: el pago a proveedores es la suma de su
+  // reparto (no el 80/20 fijo). Se guarda un snapshot para que la cotización no
+  // cambie si después editan el concepto en el catálogo.
+  if (action === 'add_concepto') {
+    const conceptoId = form.get('concepto_id') as string;
+    const concepto = conceptoId
+      ? await db.prepare('SELECT * FROM conceptos_servicio WHERE id = ?').bind(conceptoId).first<any>()
+      : null;
+    if (!concepto) {
+      error = 'Concepto no encontrado.';
+    } else {
+      const { results: reps } = await db
+        .prepare('SELECT proveedor_nombre, rol, monto_mxn FROM repartos_concepto WHERE concepto_id = ?')
+        .bind(conceptoId).all<any>();
+      const repartos = (reps ?? []).filter((r: any) => r.proveedor_nombre);
+      const pagoProv = repartos.reduce((s: number, r: any) => s + (r.monto_mxn ?? 0), 0);
+      const maxOrden = await db
+        .prepare('SELECT MAX(orden) as m FROM lineas_cotizacion WHERE cotizacion_id = ?')
+        .bind(id).first<any>();
+      const orden = (maxOrden?.m ?? 0) + 1;
+      await db
+        .prepare(`INSERT INTO lineas_cotizacion
+                    (id, cotizacion_id, descripcion, cantidad, precio_unitario, rol, proveedor_nombre, concepto_id, pago_proveedor, reparto_json, orden)
+                  VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(
+          newId(), id, concepto.nombre, concepto.precio_mxn ?? 0, concepto.rol ?? null,
+          repartos.map((r: any) => r.proveedor_nombre).join(', ') || null,
+          conceptoId, pagoProv, JSON.stringify(repartos), orden
+        )
+        .run();
+      await db.prepare('UPDATE cotizaciones SET updated_at = ? WHERE id = ?').bind(now(), id).run();
+      return Astro.redirect(`/cotizaciones/${id}`);
+    }
+  }
+
+  // ── Agregar línea manual (servicio fuera del catálogo) ─────────────────────
+  if (action === 'add_linea') {
+    const desc    = (form.get('descripcion') as string)?.trim();
+    const cobro   = Number(form.get('cobro_cliente') ?? 0) || 0;
+    const rol     = (form.get('rol') as string)?.trim() || null;
+    const prov    = (form.get('proveedor_nombre') as string)?.trim() || null;
+    const pagoRaw = form.get('pago_proveedor');
+    const pagoProv = pagoRaw === null || pagoRaw === '' ? null : Number(pagoRaw) || 0;
+    if (!desc) {
+      error = 'La descripción es obligatoria.';
+    } else {
+      const maxOrden = await db
+        .prepare('SELECT MAX(orden) as m FROM lineas_cotizacion WHERE cotizacion_id = ?')
+        .bind(id).first<any>();
+      const orden = (maxOrden?.m ?? 0) + 1;
+      await db
+        .prepare('INSERT INTO lineas_cotizacion (id, cotizacion_id, descripcion, cantidad, precio_unitario, rol, proveedor_nombre, pago_proveedor, orden) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)')
+        .bind(newId(), id, desc, cobro, rol, prov, pagoProv, orden)
+        .run();
+      await db.prepare('UPDATE cotizaciones SET updated_at = ? WHERE id = ?').bind(now(), id).run();
+      return Astro.redirect(`/cotizaciones/${id}`);
+    }
+  }
+
+  // ── Editar línea ───────────────────────────────────────────────────────────
+  if (action === 'edit_linea') {
+    const lineaId = form.get('linea_id') as string;
+    const desc    = (form.get('descripcion') as string)?.trim();
+    const cobro   = Number(form.get('cobro_cliente') ?? 0) || 0;
+    const rol     = (form.get('rol') as string)?.trim() || null;
+    const prov    = (form.get('proveedor_nombre') as string)?.trim() || null;
+    const pagoRaw = form.get('pago_proveedor');
+    const pagoProv = pagoRaw === null || pagoRaw === '' ? null : Number(pagoRaw) || 0;
+    if (desc) {
+      await db
+        .prepare('UPDATE lineas_cotizacion SET descripcion = ?, precio_unitario = ?, rol = ?, proveedor_nombre = ?, pago_proveedor = ? WHERE id = ? AND cotizacion_id = ?')
+        .bind(desc, cobro, rol, prov, pagoProv, lineaId, id).run();
+      await db.prepare('UPDATE cotizaciones SET updated_at = ? WHERE id = ?').bind(now(), id).run();
+    }
+    return Astro.redirect(`/cotizaciones/${id}`);
+  }
+
+  // ── Borrar línea ───────────────────────────────────────────────────────────
+  if (action === 'delete_linea') {
+    const lineaId = form.get('linea_id') as string;
+    await db.prepare('DELETE FROM lineas_cotizacion WHERE id = ? AND cotizacion_id = ?').bind(lineaId, id).run();
+    await db.prepare('UPDATE cotizaciones SET updated_at = ? WHERE id = ?').bind(now(), id).run();
+    return Astro.redirect(`/cotizaciones/${id}`);
+  }
+
+  // ── Editar cabecera ────────────────────────────────────────────────────────
+  if (action === 'edit_header') {
+    const titulo = (form.get('titulo') as string)?.trim();
+    if (!titulo) { error = 'El título es obligatorio.'; }
+    else {
+      const get = (k: string) => { const v = form.get(k); return v === null || v === '' ? null : String(v).trim(); };
+      await db
+        .prepare('UPDATE cotizaciones SET titulo = ?, cliente_id = ?, cliente_libre = ?, fecha_vencimiento = ?, notas = ?, notas_internas = ?, updated_at = ? WHERE id = ?')
+        .bind(titulo, get('cliente_id'), get('cliente_libre'), get('fecha_vencimiento'), get('notas'), get('notas_internas'), now(), id)
+        .run();
+      msgOk = 'Guardado.';
+    }
+  }
+
+  // ── Convertir a proyecto ───────────────────────────────────────────────────
+  if (action === 'convertir') {
+    const cot = await db.prepare('SELECT * FROM cotizaciones WHERE id = ?').bind(id).first<any>();
+    if (!cot || cot.estado !== 'autorizada') {
+      error = 'Solo se puede convertir una cotización autorizada.';
+    } else {
+      const { results: lineas } = await db
+        .prepare('SELECT * FROM lineas_cotizacion WHERE cotizacion_id = ? ORDER BY orden')
+        .bind(id).all<any>();
+
+      const prodId = newId();
+      const ts = now();
+      const totalCobro = (lineas ?? []).reduce((s: number, l: any) => s + (l.precio_unitario ?? 0), 0);
+
+      await db
+        .prepare(`INSERT INTO producciones (id, titulo, cliente_id, fecha_inicio, estado, presupuesto, notas, created_at, updated_at)
+                  VALUES (?, ?, ?, date('now'), 'planeacion', ?, ?, ?, ?)`)
+        .bind(prodId, cot.titulo, cot.cliente_id, totalCobro, cot.notas, ts, ts)
+        .run();
+
+      for (const l of (lineas ?? [])) {
+        const cobroLinea = l.precio_unitario ?? 0;
+        // Reparto real (concepto del catálogo): una línea de producción por proveedor,
+        // repartiendo el cobro proporcionalmente para que cada quien reciba su monto.
+        let repartos: any[] = [];
+        try { repartos = JSON.parse(l.reparto_json ?? '[]').filter((r: any) => r.proveedor_nombre); } catch {}
+        const sumRep = repartos.reduce((s: number, r: any) => s + (r.monto_mxn ?? 0), 0);
+
+        if (repartos.length > 0 && sumRep > 0 && cobroLinea > 0) {
+          const marginPct = Math.max(0, Math.min(100, (1 - sumRep / cobroLinea) * 100));
+          for (const r of repartos) {
+            const cobroProv = cobroLinea * ((r.monto_mxn ?? 0) / sumRep);
+            await db
+              .prepare(`INSERT INTO lineas_produccion (id, produccion_id, nombre_libre, rol, cobro_cliente, comision_pct, estado, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, 'pendiente', ?)`)
+              .bind(newId(), prodId, r.proveedor_nombre, r.rol ?? l.rol ?? 'Servicio', cobroProv, marginPct, ts)
+              .run();
+          }
+        } else {
+          // Línea manual: pago_proveedor explícito o 80/20 por defecto
+          const pagoProv = l.pago_proveedor;
+          const comisionPct = (pagoProv != null && cobroLinea > 0)
+            ? Math.max(0, Math.min(100, (1 - pagoProv / cobroLinea) * 100))
+            : 20;
+          await db
+            .prepare(`INSERT INTO lineas_produccion (id, produccion_id, nombre_libre, rol, cobro_cliente, comision_pct, estado, created_at)
+                      VALUES (?, ?, ?, ?, ?, ?, 'pendiente', ?)`)
+            .bind(newId(), prodId, l.proveedor_nombre ?? l.descripcion, l.rol ?? 'Servicio', cobroLinea, comisionPct, ts)
+            .run();
+        }
+      }
+
+      await db
+        .prepare("UPDATE cotizaciones SET estado = 'convertida', produccion_id = ?, updated_at = ? WHERE id = ?")
+        .bind(prodId, ts, id).run();
+
+      return Astro.redirect(`/producciones/${prodId}`);
+    }
+  }
+}
+
+const cot = await db
+  .prepare(`SELECT c.*, cl.nombre as cliente_nombre FROM cotizaciones c LEFT JOIN clientes cl ON cl.id = c.cliente_id WHERE c.id = ?`)
+  .bind(id).first<any>();
+if (!cot) return Astro.redirect('/cotizaciones');
+
+const { results: lineasRaw } = await db
+  .prepare('SELECT * FROM lineas_cotizacion WHERE cotizacion_id = ? ORDER BY orden')
+  .bind(id).all<any>();
+
+// Enriquecer cada línea con su pago a proveedor real y reparto parseado.
+const lineas = (lineasRaw ?? []).map((l: any) => {
+  let repartos: any[] = [];
+  try { repartos = JSON.parse(l.reparto_json ?? '[]').filter((r: any) => r.proveedor_nombre); } catch {}
+  const cobro = l.precio_unitario ?? 0;
+  // Pago a proveedores: si la línea tiene pago_proveedor definido (concepto o manual), úsalo; si no, 80/20.
+  const pago = l.pago_proveedor != null ? l.pago_proveedor : Math.round(cobro * 0.8);
+  return { ...l, repartos, _cobro: cobro, _pago: pago, _util: cobro - pago };
+});
+
+const { results: clientes } = await db.prepare('SELECT id, nombre FROM clientes ORDER BY nombre').all<any>();
+
+// Catálogo de conceptos con su reparto (para agregar al catálogo)
+const { results: conceptosCat } = await db
+  .prepare(
+    `SELECT cs.id, cs.nombre, cs.rol, cs.precio_mxn,
+            json_group_array(json_object(
+              'proveedor_nombre', r.proveedor_nombre,
+              'rol', r.rol,
+              'monto_mxn', r.monto_mxn
+            )) as repartos_json
+     FROM conceptos_servicio cs
+     LEFT JOIN repartos_concepto r ON r.concepto_id = cs.id
+     WHERE cs.activo = 1
+     GROUP BY cs.id
+     ORDER BY cs.rol, cs.nombre`
+  )
+  .all<any>();
+
+const proveedoresData = (conceptosCat ?? []).map((c: any) => {
+  let repartos: any[] = [];
+  try { repartos = JSON.parse(c.repartos_json ?? '[]').filter((r: any) => r.proveedor_nombre); } catch {}
+  const sumRep = repartos.reduce((s: number, r: any) => s + (r.monto_mxn ?? 0), 0);
+  return { ...c, repartos, sumRep, margen: (c.precio_mxn ?? 0) - sumRep };
+});
+
+// Totales — suma de los valores reales de cada línea
+const totalCobrado     = lineas.reduce((s: number, l: any) => s + l._cobro, 0);
+const totalProveedores = lineas.reduce((s: number, l: any) => s + l._pago, 0);
+const totalUtilidad    = totalCobrado - totalProveedores;
+const margenPct        = totalCobrado > 0 ? Math.round((totalUtilidad / totalCobrado) * 100) : 0;
+
+const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
+
+const editLineaId = Astro.url.searchParams.get('editar_linea');
+
+const colorEstado: Record<string, string> = {
+  borrador: '', enviada: '#e9b949', autorizada: 'var(--text-ok,#4ade80)',
+  rechazada: 'var(--danger,#e25555)', convertida: 'var(--text-ok,#4ade80)'
+};
+
+const ESTADOS_FLUJO = [
+  { v: 'borrador',   label: 'Borrador' },
+  { v: 'enviada',    label: 'Enviada al cliente' },
+  { v: 'autorizada', label: 'Autorizada' },
+  { v: 'rechazada',  label: 'Rechazada' },
+];
+---
+
+<Layout title={`${cot.numero} — ${cot.titulo}`} pageTitle="Cotizaciones">
+  <div class="page-head">
+    <div>
+      <div style="display:flex;gap:10px;align-items:baseline">
+        <span class="mono" style="color:var(--gold);font-size:13px;letter-spacing:.1em">{cot.numero}</span>
+        <h1 style="margin:0">{cot.titulo}</h1>
+      </div>
+      <div class="card-meta" style="margin-top:4px">
+        <span class="text-muted">{cot.cliente_nombre ?? cot.cliente_libre ?? 'Sin cliente'}</span>
+        <span class="chip" style={`color:${colorEstado[cot.estado] ?? ''}`}>{cot.estado}</span>
+        {cot.fecha_vencimiento && <span class="mono text-muted">vence {formatFecha(cot.fecha_vencimiento)}</span>}
+        {cot.produccion_id && <a href={`/producciones/${cot.produccion_id}`} class="chip chip-ok">ver proyecto →</a>}
+      </div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <a href={`/cotizaciones/imprimir/${id}`} target="_blank" class="btn btn-sm" title="Exportar PDF">⬇ PDF</a>
+      <a href="/cotizaciones" class="btn btn-sm">Volver</a>
+    </div>
+  </div>
+
+  {error  && <p class="text-danger" style="margin-bottom:16px">{error}</p>}
+  {msgOk  && <p class="text-ok"    style="margin-bottom:16px">{msgOk}</p>}
+
+  {/* ── Resumen financiero ── */}
+  {totalCobrado > 0 && (
+    <div class="row" style="margin-bottom:24px">
+      <div class="col card" style="border-left:3px solid var(--gold)">
+        <div class="card-meta">Total cobrado al cliente</div>
+        <div class="card-title mono" style="color:var(--gold)">{fmt(totalCobrado)}</div>
+      </div>
+      <div class="col card" style="border-left:3px solid var(--danger,#e25555)">
+        <div class="card-meta">Pago a proveedores</div>
+        <div class="card-title mono" style="color:var(--danger,#e25555)">{fmt(totalProveedores)}</div>
+      </div>
+      <div class="col card" style="border-left:3px solid var(--text-ok,#4ade80)">
+        <div class="card-meta">Utilidad neta ({margenPct}%)</div>
+        <div class="card-title mono text-ok">{fmt(totalUtilidad)}</div>
+      </div>
+    </div>
+  )}
+
+  {/* ── Acciones de estado ── */}
+  {editable && cot.estado !== 'convertida' && (
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:24px">
+      {ESTADOS_FLUJO.filter((e) => e.v !== cot.estado).map((e) => (
+        <form method="POST" action={`/cotizaciones/${id}`} style="display:inline">
+          <input type="hidden" name="_action" value="set_estado" />
+          <input type="hidden" name="estado" value={e.v} />
+          <button type="submit" class={`btn btn-sm ${e.v === 'autorizada' ? 'btn-primary' : e.v === 'rechazada' ? 'btn-danger' : ''}`}>
+            → {e.label}
+          </button>
+        </form>
+      ))}
+      {cot.estado === 'autorizada' && (
+        <form method="POST" action={`/cotizaciones/${id}`} style="display:inline"
+              onsubmit="return confirm('¿Convertir en proyecto? Se creará una producción con todas las líneas y sus proveedores.')">
+          <input type="hidden" name="_action" value="convertir" />
+          <button type="submit" class="btn btn-primary" style="background:var(--gold);color:#000;font-weight:700">
+            ✓ Convertir en proyecto
+          </button>
+        </form>
+      )}
+    </div>
+  )}
+
+  {/* ── Líneas ── */}
+  <div style="margin-bottom:32px">
+    <h2 style="margin-bottom:12px">Servicios cotizados</h2>
+
+    {lineas.length > 0 && (
+      <div class="table-card" style="margin-bottom:12px">
+        <table>
+          <thead>
+            <tr>
+              <th>Rol</th>
+              <th>Concepto / Proveedores</th>
+              <th class="right">Cobro cliente</th>
+              <th class="right">Pago proveedores</th>
+              <th class="right">Utilidad FC</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {(lineas as any[]).map((l) => (
+              editLineaId === l.id ? (
+                <tr>
+                  <td colspan="6" style="padding:0">
+                    <form method="POST" action={`/cotizaciones/${id}`}
+                          style="display:grid;grid-template-columns:130px 1fr 110px 110px auto auto;gap:6px;padding:8px;background:var(--bg-2)">
+                      <input type="hidden" name="_action" value="edit_linea" />
+                      <input type="hidden" name="linea_id" value={l.id} />
+                      <select class="select" name="rol" style="font-size:12px">
+                        <option value="">— rol —</option>
+                        {ROLES.map((r) => <option value={r} selected={l.rol === r}>{r}</option>)}
+                      </select>
+                      <input class="input" name="descripcion" value={l.descripcion} required placeholder="Descripción" />
+                      <input class="input" type="number" name="cobro_cliente" value={l.precio_unitario ?? 0} min="0" step="1" placeholder="Cobro" title="Cobro al cliente" />
+                      <input class="input" type="number" name="pago_proveedor" value={l.pago_proveedor ?? ''} min="0" step="1" placeholder="Pago prov." title="Pago a proveedores (vacío = 80%)" />
+                      <input type="hidden" name="proveedor_nombre" value={l.proveedor_nombre ?? ''} />
+                      <button type="submit" class="btn btn-sm btn-primary">✓</button>
+                      <a href={`/cotizaciones/${id}`} class="btn btn-sm">✕</a>
+                    </form>
+                  </td>
+                </tr>
+              ) : (
+                <tr>
+                  <td><span class="chip" style="font-size:10px">{l.rol ?? '—'}</span></td>
+                  <td>
+                    <div style="font-weight:500">
+                      {l.descripcion}
+                      {l.concepto_id && <span class="chip" style="font-size:9px;margin-left:6px;color:var(--gold)">catálogo</span>}
+                    </div>
+                    {l.repartos.length > 0 ? (
+                      <div class="text-muted" style="font-size:11px;margin-top:3px">
+                        {(l.repartos as any[]).map((r) => (
+                          <div>· {r.proveedor_nombre}{r.rol ? ` (${r.rol})` : ''} — {fmt(r.monto_mxn ?? 0)}</div>
+                        ))}
+                      </div>
+                    ) : (
+                      l.proveedor_nombre && <div class="text-muted" style="font-size:11px">{l.proveedor_nombre}</div>
+                    )}
+                  </td>
+                  <td class="right mono" style="color:var(--gold)">{fmt(l._cobro)}</td>
+                  <td class="right mono" style="color:var(--danger,#e25555)">{fmt(l._pago)}</td>
+                  <td class="right mono text-ok">{fmt(l._util)}</td>
+                  <td style="white-space:nowrap">
+                    {editable && cot.estado !== 'convertida' && (
+                      <>
+                        <a href={`/cotizaciones/${id}?editar_linea=${l.id}`} class="btn btn-sm" style="margin-right:4px">Editar</a>
+                        <form method="POST" action={`/cotizaciones/${id}`} style="display:inline">
+                          <input type="hidden" name="_action" value="delete_linea" />
+                          <input type="hidden" name="linea_id" value={l.id} />
+                          <button type="submit" class="btn btn-sm btn-danger">✕</button>
+                        </form>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              )
+            ))}
+          </tbody>
+          <tfoot style="border-top:2px solid var(--border)">
+            <tr>
+              <td colspan="2" style="font-weight:600;text-align:right">Total</td>
+              <td class="right mono" style="color:var(--gold);font-size:15px">{fmt(totalCobrado)}</td>
+              <td class="right mono" style="color:var(--danger,#e25555);font-size:15px">{fmt(totalProveedores)}</td>
+              <td class="right mono text-ok" style="font-size:15px">{fmt(totalUtilidad)}</td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    )}
+
+    {!lineas.length && <p class="text-muted">Sin líneas aún. Agrega conceptos del catálogo abajo.</p>}
+
+    {/* ── Agregar desde el catálogo ── */}
+    {editable && cot.estado !== 'convertida' && proveedoresData.length > 0 && (
+      <details style="background:var(--bg-2);border:1px solid var(--border);padding:16px;margin-bottom:12px" open id="details_add_cat">
+        <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Agregar del catálogo de servicios</summary>
+        <p class="text-muted" style="font-size:11px;margin:8px 0 12px">
+          El concepto trae su precio y el reparto a proveedores ya definido. La utilidad de FC se calcula sola.
+        </p>
+        <form method="POST" action={`/cotizaciones/${id}`} style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+          <input type="hidden" name="_action" value="add_concepto" />
+          <div style="flex:1;min-width:280px">
+            <label class="label">Concepto</label>
+            <select class="select" name="concepto_id" id="sel_prov_cat" onchange="onProvChange()" required>
+              <option value="">— elegir concepto —</option>
+              {proveedoresData.map((c: any) => (
+                <option value={c.id}>
+                  {c.rol ? `[${c.rol}] ` : ''}{c.nombre} — ${Math.round(c.precio_mxn).toLocaleString('es-MX')}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary">Agregar a la cotización</button>
+        </form>
+
+        {/* Preview del reparto del concepto seleccionado */}
+        <div id="preview_concepto" style="display:none;margin-top:12px;padding:10px;background:var(--bg-3,#1a1a1a);border:1px solid var(--border);border-radius:4px">
+          <div class="card-meta" style="margin-bottom:6px">Desglose del concepto</div>
+          <div id="preview_repartos" style="font-size:12px"></div>
+        </div>
+
+        <p style="font-size:11px;margin-top:14px">
+          <a href="/proveedores" style="color:var(--gold)">¿Falta un concepto? Crea o edita en el catálogo de servicios →</a>
+        </p>
+      </details>
+    )}
+
+    {/* ── Agregar servicio manual (fuera del catálogo) ── */}
+    {editable && cot.estado !== 'convertida' && (
+      <details style="background:var(--bg-2);border:1px solid var(--border);padding:16px" id="details_add_linea">
+        <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--text-muted,#888)">+ Agregar servicio manual (fuera del catálogo)</summary>
+
+        <form method="POST" action={`/cotizaciones/${id}`} style="margin-top:12px" id="form_add_linea">
+          <input type="hidden" name="_action" value="add_linea" />
+          <div class="row">
+            <div class="col">
+              <label class="label">Rol *</label>
+              <select class="select" name="rol" id="inp_rol">
+                <option value="">— elige rol —</option>
+                {ROLES.map((r) => <option value={r}>{r}</option>)}
+              </select>
+            </div>
+            <div class="col" style="flex:2">
+              <label class="label">Descripción *</label>
+              <input class="input" name="descripcion" id="inp_desc" required placeholder="Ej. Sesión foto estudio 4 hrs" />
+            </div>
+            <div class="col">
+              <label class="label">Proveedor</label>
+              <input class="input" name="proveedor_nombre" id="inp_prov" placeholder="Nombre del proveedor" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="col">
+              <label class="label">Cobro al cliente MXN</label>
+              <input class="input" type="number" name="cobro_cliente" id="inp_cobro" placeholder="0" min="0" step="1" oninput="calcUtilManual()" />
+            </div>
+            <div class="col">
+              <label class="label">Pago al proveedor MXN <span class="text-muted" style="font-weight:400">(vacío = 80%)</span></label>
+              <input class="input" type="number" name="pago_proveedor" id="inp_pago" placeholder="auto 80%" min="0" step="1" oninput="calcUtilManual()" />
+            </div>
+            <div class="col" style="display:flex;align-items:flex-end">
+              <div id="util_manual" style="font-size:12px;color:var(--text-ok,#4ade80);font-weight:600;padding-bottom:10px"></div>
+            </div>
+          </div>
+          {/* Helper de horas para modelos */}
+          <div id="helper_modelo" style="display:none;background:var(--bg-3,#1a1a1a);border:1px solid var(--border);padding:10px;margin-top:8px;border-radius:4px">
+            <label class="label" style="margin-bottom:6px">Calcular tarifa de modelo</label>
+            <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+              <div>
+                <label class="label" style="font-size:10px">Horas</label>
+                <input class="input" type="number" id="inp_horas_modelo" min="1" step="0.5" placeholder="Ej. 3"
+                       style="width:80px" oninput="calcTarifaModelo()" />
+              </div>
+              <div style="font-size:12px;color:var(--text-muted,#888);padding-bottom:8px">
+                1ª hora $1,000 &middot; horas extra $800/hr
+              </div>
+              <div id="modelo_result" style="font-size:13px;color:var(--gold);font-weight:600;padding-bottom:8px"></div>
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary" style="margin-top:8px">Agregar</button>
+        </form>
+      </details>
+    )}
+  </div>
+
+  {/* ── Editar cabecera ── */}
+  {editable && cot.estado !== 'convertida' && (
+    <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:32px">
+      <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">Editar datos generales</summary>
+      <form method="POST" action={`/cotizaciones/${id}`} style="margin-top:16px">
+        <input type="hidden" name="_action" value="edit_header" />
+        <label class="label">Título *</label>
+        <input class="input" name="titulo" value={cot.titulo} required />
+        <div class="row">
+          <div class="col">
+            <label class="label">Cliente registrado</label>
+            <select class="select" name="cliente_id">
+              <option value="">— sin asignar —</option>
+              {clientes?.map((c: any) => <option value={c.id} selected={cot.cliente_id === c.id}>{c.nombre}</option>)}
+            </select>
+          </div>
+          <div class="col">
+            <label class="label">O cliente libre</label>
+            <input class="input" name="cliente_libre" value={cot.cliente_libre ?? ''} />
+          </div>
+          <div class="col">
+            <label class="label">Fecha vencimiento</label>
+            <input class="input" type="date" name="fecha_vencimiento" value={cot.fecha_vencimiento ?? ''} />
+          </div>
+        </div>
+        <label class="label">Notas para el cliente</label>
+        <textarea class="textarea" name="notas">{cot.notas ?? ''}</textarea>
+        <label class="label">Notas internas</label>
+        <textarea class="textarea" name="notas_internas">{cot.notas_internas ?? ''}</textarea>
+        <button type="submit" class="btn btn-primary" style="margin-top:14px">Guardar cambios</button>
+      </form>
+    </details>
+  )}
+
+  {cot.notas && (
+    <div class="card" style="margin-bottom:24px">
+      <div class="card-meta">Notas para el cliente</div>
+      <p style="margin-top:8px;white-space:pre-wrap;font-size:14px">{cot.notas}</p>
+    </div>
+  )}
+</Layout>
+
+<script define:vars={{ proveedoresData }}>
+// Datos del catálogo inyectados por el servidor
+const CATALOGO = proveedoresData;
+
+const fmtMX = (n) => `$${Math.round(n || 0).toLocaleString('es-MX')}`;
+
+// Preview del reparto al elegir un concepto del catálogo
+function onProvChange() {
+  const sel = document.getElementById('sel_prov_cat');
+  if (!sel) return;
+  const concepto = CATALOGO.find((c) => c.id === sel.value);
+  const box = document.getElementById('preview_concepto');
+  const cont = document.getElementById('preview_repartos');
+  if (!concepto || !box || !cont) { if (box) box.style.display = 'none'; return; }
+
+  const repartos = concepto.repartos ?? [];
+  let html = '';
+  for (const r of repartos) {
+    html += `<div style="display:flex;justify-content:space-between;padding:2px 0">
+      <span>· ${r.proveedor_nombre}${r.rol ? ` <span style="color:#888">(${r.rol})</span>` : ''}</span>
+      <span class="mono" style="color:var(--danger,#e25555)">${fmtMX(r.monto_mxn)}</span></div>`;
+  }
+  html += `<div style="display:flex;justify-content:space-between;padding:6px 0 2px;margin-top:4px;border-top:1px solid var(--border)">
+      <span style="color:var(--gold)">Utilidad FC Agency</span>
+      <span class="mono" style="color:var(--text-ok,#4ade80)">${fmtMX(concepto.margen)}</span></div>`;
+  html += `<div style="display:flex;justify-content:space-between;padding:2px 0;font-weight:600">
+      <span>Cobro al cliente</span>
+      <span class="mono" style="color:var(--gold)">${fmtMX(concepto.precio_mxn)}</span></div>`;
+  cont.innerHTML = html;
+  box.style.display = 'block';
+}
+
+// Utilidad en vivo en el form manual
+function calcUtilManual() {
+  const cobro = parseFloat(document.getElementById('inp_cobro')?.value || '0') || 0;
+  const pagoRaw = document.getElementById('inp_pago')?.value;
+  const pago = pagoRaw === '' || pagoRaw == null ? Math.round(cobro * 0.8) : (parseFloat(pagoRaw) || 0);
+  const out = document.getElementById('util_manual');
+  if (out) out.textContent = cobro > 0 ? `Utilidad FC: ${fmtMX(cobro - pago)}` : '';
+}
+
+// Helper tarifa modelo
+function calcTarifaModelo() {
+  const hrs   = parseFloat(document.getElementById('inp_horas_modelo')?.value || '0') || 0;
+  const cobro = hrs <= 0 ? 0 : Math.round(1000 + Math.max(0, hrs - 1) * 800);
+  const res   = document.getElementById('modelo_result');
+  const inp   = document.getElementById('inp_cobro');
+  if (res) res.textContent = hrs > 0 ? `= $${cobro.toLocaleString('es-MX')} MXN` : '';
+  if (inp && hrs > 0) { inp.value = String(cobro); calcUtilManual(); }
+}
+
+// Mostrar/ocultar helper cuando rol=Modelo
+document.getElementById('inp_rol')?.addEventListener('change', function () {
+  const helper = document.getElementById('helper_modelo');
+  if (helper) helper.style.display = this.value === 'Modelo' ? 'block' : 'none';
+});
+</script>

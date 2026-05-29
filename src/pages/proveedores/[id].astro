@@ -1,0 +1,347 @@
+---
+import Layout from '../../components/Layout.astro';
+import { requireUser, canEdit } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
+
+const user     = requireUser(Astro);
+const editable = canEdit(user);
+const db       = getDB(Astro);
+const { id }   = Astro.params;
+
+const ROLES = [
+  'Fotografía', 'Video', 'Modelo', 'Maquillaje', 'Peinado', 'Styling',
+  'Producción', 'Arte / Set', 'Locación', 'Catering', 'Transporte',
+  'Audio', 'Iluminación', 'Operación', 'Montaje', 'Estudio', 'Day pass',
+  'Espacio', 'Pantallas', 'Desmontaje', 'Otro'
+];
+
+let error: string | null = null;
+let msgOk: string | null = null;
+
+if (Astro.request.method === 'POST' && editable) {
+  const form   = await Astro.request.formData();
+  const action = form.get('_action') as string;
+
+  // ── Editar concepto ───────────────────────────────────────────────────────
+  if (action === 'edit_concepto') {
+    const nombre = (form.get('nombre') as string)?.trim();
+    const precio = Number(form.get('precio_mxn') ?? 0) || 0;
+    if (!nombre) { error = 'El nombre es obligatorio.'; }
+    else {
+      const get = (k: string) => { const v = form.get(k); return v === null || v === '' ? null : String(v).trim(); };
+      await db
+        .prepare(`UPDATE conceptos_servicio SET nombre=?, rol=?, descripcion=?, precio_mxn=?, notas=?, updated_at=? WHERE id=?`)
+        .bind(nombre, get('rol'), get('descripcion'), precio, get('notas'), now(), id)
+        .run();
+      msgOk = 'Concepto actualizado.';
+    }
+  }
+
+  // ── Agregar reparto ───────────────────────────────────────────────────────
+  if (action === 'add_reparto') {
+    const prov  = (form.get('proveedor_nombre') as string)?.trim();
+    const monto = Number(form.get('monto_mxn') ?? 0) || 0;
+    if (!prov) { error = 'El nombre del proveedor es obligatorio.'; }
+    else {
+      const get = (k: string) => { const v = form.get(k); return v === null || v === '' ? null : String(v).trim(); };
+      await db
+        .prepare(`INSERT INTO repartos_concepto (id, concepto_id, proveedor_nombre, rol, monto_mxn, notas) VALUES (?,?,?,?,?,?)`)
+        .bind(newId(), id, prov, get('rol'), monto, get('notas'))
+        .run();
+      await db.prepare('UPDATE conceptos_servicio SET updated_at=? WHERE id=?').bind(now(), id).run();
+      return Astro.redirect(`/proveedores/${id}`);
+    }
+  }
+
+  // ── Editar reparto ────────────────────────────────────────────────────────
+  if (action === 'edit_reparto') {
+    const rId   = form.get('reparto_id') as string;
+    const prov  = (form.get('proveedor_nombre') as string)?.trim();
+    const monto = Number(form.get('monto_mxn') ?? 0) || 0;
+    const get   = (k: string) => { const v = form.get(k); return v === null || v === '' ? null : String(v).trim(); };
+    if (prov) {
+      await db
+        .prepare(`UPDATE repartos_concepto SET proveedor_nombre=?, rol=?, monto_mxn=?, notas=? WHERE id=? AND concepto_id=?`)
+        .bind(prov, get('rol'), monto, get('notas'), rId, id)
+        .run();
+    }
+    return Astro.redirect(`/proveedores/${id}`);
+  }
+
+  // ── Borrar reparto ────────────────────────────────────────────────────────
+  if (action === 'delete_reparto') {
+    await db.prepare('DELETE FROM repartos_concepto WHERE id=? AND concepto_id=?').bind(form.get('reparto_id'), id).run();
+    return Astro.redirect(`/proveedores/${id}`);
+  }
+
+  // ── Archivar concepto ─────────────────────────────────────────────────────
+  if (action === 'archivar') {
+    await db.prepare('UPDATE conceptos_servicio SET activo=0, updated_at=? WHERE id=?').bind(now(), id).run();
+    return Astro.redirect('/proveedores');
+  }
+}
+
+const concepto = await db.prepare('SELECT * FROM conceptos_servicio WHERE id=?').bind(id).first<any>();
+if (!concepto) return Astro.redirect('/proveedores');
+
+const { results: repartos } = await db
+  .prepare('SELECT * FROM repartos_concepto WHERE concepto_id=? ORDER BY monto_mxn DESC')
+  .bind(id).all<any>();
+
+const totalRepartido = (repartos ?? []).reduce((s: number, r: any) => s + (r.monto_mxn ?? 0), 0);
+const margen         = concepto.precio_mxn - totalRepartido;
+const pctMargen      = concepto.precio_mxn > 0 ? (margen / concepto.precio_mxn * 100) : 0;
+
+const fmt    = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
+const pct    = (n: number) => concepto.precio_mxn > 0 ? `${Math.round(n / concepto.precio_mxn * 100)}%` : '—';
+
+const editRepartoId = Astro.url.searchParams.get('editar');
+---
+
+<Layout title={concepto.nombre} pageTitle="Catálogo de Servicios">
+  <div class="page-head">
+    <div>
+      <h1 style="margin:0">{concepto.nombre}</h1>
+      <div class="card-meta" style="margin-top:4px">
+        {concepto.rol && <span class="chip">{concepto.rol}</span>}
+        {concepto.descripcion && <span class="text-muted">{concepto.descripcion}</span>}
+      </div>
+    </div>
+    <a href="/proveedores" class="btn btn-sm">Volver</a>
+  </div>
+
+  {error && <p class="text-danger" style="margin-bottom:16px">{error}</p>}
+  {msgOk && <p class="text-ok"    style="margin-bottom:16px">{msgOk}</p>}
+
+  {/* ── Resumen financiero ── */}
+  <div class="row" style="margin-bottom:28px">
+    <div class="col card" style="border-left:3px solid var(--gold)">
+      <div class="card-meta">Cobro al cliente</div>
+      <div class="card-title mono" style="color:var(--gold)">{fmt(concepto.precio_mxn)}</div>
+    </div>
+    <div class="col card" style="border-left:3px solid var(--danger,#e25555)">
+      <div class="card-meta">Total a proveedores</div>
+      <div class="card-title mono" style="color:var(--danger,#e25555)">{fmt(totalRepartido)}</div>
+    </div>
+    <div class="col card" style={`border-left:3px solid ${margen >= 0 ? 'var(--text-ok,#4ade80)' : 'var(--danger,#e25555)'}`}>
+      <div class="card-meta">Margen FC Agency</div>
+      <div class="card-title mono" style={`color:${margen >= 0 ? 'var(--text-ok,#4ade80)' : 'var(--danger,#e25555)'}`}>
+        {fmt(margen)} <span style="font-size:12px;opacity:.7">({Math.round(pctMargen)}%)</span>
+      </div>
+    </div>
+  </div>
+
+  {/* ── Barra visual de reparto ── */}
+  {(repartos?.length ?? 0) > 0 && (
+    <div style="margin-bottom:28px">
+      <div style="height:18px;border-radius:3px;overflow:hidden;display:flex;gap:1px">
+        {(repartos as any[]).map((r, i) => {
+          const w = concepto.precio_mxn > 0 ? Math.max(1, r.monto_mxn / concepto.precio_mxn * 100) : 0;
+          const colores = ['#e25555','#e9b949','#4ade80','#60a5fa','#c084fc','#fb923c','#34d399','#f87171'];
+          return <div style={`flex:0 0 ${w}%;background:${colores[i % colores.length]};opacity:.8`} title={`${r.proveedor_nombre}: ${fmt(r.monto_mxn)}`}></div>;
+        })}
+        {margen > 0 && (
+          <div style={`flex:1;background:var(--text-ok,#4ade80);opacity:.5`} title={`FC Agency: ${fmt(margen)}`}></div>
+        )}
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:11px">
+        {(repartos as any[]).map((r, i) => {
+          const colores = ['#e25555','#e9b949','#4ade80','#60a5fa','#c084fc','#fb923c','#34d399','#f87171'];
+          return (
+            <span style="display:flex;align-items:center;gap:4px">
+              <span style={`width:10px;height:10px;border-radius:2px;background:${colores[i % colores.length]};opacity:.8;display:inline-block`}></span>
+              <span class="text-muted">{r.proveedor_nombre}</span>
+              <span class="mono" style="color:var(--gold)">{fmt(r.monto_mxn)}</span>
+              <span class="text-muted">({pct(r.monto_mxn)})</span>
+            </span>
+          );
+        })}
+        {margen > 0 && (
+          <span style="display:flex;align-items:center;gap:4px">
+            <span style="width:10px;height:10px;border-radius:2px;background:var(--text-ok,#4ade80);opacity:.5;display:inline-block"></span>
+            <span class="text-muted">FC Agency</span>
+            <span class="mono text-ok">{fmt(margen)}</span>
+            <span class="text-muted">({Math.round(pctMargen)}%)</span>
+          </span>
+        )}
+      </div>
+    </div>
+  )}
+
+  {/* ── Tabla de reparto ── */}
+  <h2 style="margin-bottom:12px">Reparto a proveedores</h2>
+
+  {(repartos?.length ?? 0) > 0 && (
+    <div class="table-card" style="margin-bottom:16px">
+      <table>
+        <thead>
+          <tr>
+            <th>Proveedor</th>
+            <th>Rol</th>
+            <th class="right">Monto</th>
+            <th class="right">% del total</th>
+            <th>Notas</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {(repartos as any[]).map((r) => (
+            editRepartoId === r.id ? (
+              <tr>
+                <td colspan="6" style="padding:0">
+                  <form method="POST" action={`/proveedores/${id}`}
+                        style="display:grid;grid-template-columns:1fr 130px 100px 130px auto auto;gap:6px;padding:8px;background:var(--bg-2)">
+                    <input type="hidden" name="_action" value="edit_reparto" />
+                    <input type="hidden" name="reparto_id" value={r.id} />
+                    <input class="input" name="proveedor_nombre" value={r.proveedor_nombre} required placeholder="Nombre proveedor" />
+                    <select class="select" name="rol" style="font-size:12px">
+                      <option value="">— rol —</option>
+                      {ROLES.map((ro) => <option value={ro} selected={r.rol === ro}>{ro}</option>)}
+                    </select>
+                    <input class="input" type="number" name="monto_mxn" value={r.monto_mxn} min="0" step="1" />
+                    <input class="input" name="notas" value={r.notas ?? ''} placeholder="Notas" />
+                    <button type="submit" class="btn btn-sm btn-primary">✓</button>
+                    <a href={`/proveedores/${id}`} class="btn btn-sm">✕</a>
+                  </form>
+                </td>
+              </tr>
+            ) : (
+              <tr>
+                <td style="font-weight:600">{r.proveedor_nombre}</td>
+                <td>{r.rol && <span class="chip" style="font-size:10px">{r.rol}</span>}</td>
+                <td class="right mono" style="color:var(--danger,#e25555)">{fmt(r.monto_mxn)}</td>
+                <td class="right mono text-muted">{pct(r.monto_mxn)}</td>
+                <td class="text-muted" style="font-size:12px">{r.notas ?? ''}</td>
+                <td style="white-space:nowrap">
+                  {editable && (
+                    <>
+                      <a href={`/proveedores/${id}?editar=${r.id}`} class="btn btn-sm" style="margin-right:4px">Editar</a>
+                      <form method="POST" action={`/proveedores/${id}`} style="display:inline">
+                        <input type="hidden" name="_action" value="delete_reparto" />
+                        <input type="hidden" name="reparto_id" value={r.id} />
+                        <button type="submit" class="btn btn-sm btn-danger"
+                                onclick="return confirm('¿Quitar este proveedor del reparto?')">✕</button>
+                      </form>
+                    </>
+                  )}
+                </td>
+              </tr>
+            )
+          ))}
+        </tbody>
+        <tfoot style="border-top:2px solid var(--border)">
+          <tr>
+            <td colspan="2" style="font-weight:600;text-align:right">Total repartido</td>
+            <td class="right mono" style="color:var(--danger,#e25555);font-size:15px">{fmt(totalRepartido)}</td>
+            <td class="right mono text-muted">{pct(totalRepartido)}</td>
+            <td colspan="2"></td>
+          </tr>
+          <tr>
+            <td colspan="2" style="font-weight:600;text-align:right">Margen FC Agency</td>
+            <td class="right mono" style={`font-size:15px;color:${margen >= 0 ? 'var(--text-ok,#4ade80)' : 'var(--danger)'}`}>{fmt(margen)}</td>
+            <td class="right mono" style={`color:${margen >= 0 ? 'var(--text-ok,#4ade80)' : 'var(--danger)'}`}>{Math.round(pctMargen)}%</td>
+            <td colspan="2"></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  )}
+
+  {!(repartos?.length) && (
+    <p class="text-muted" style="margin-bottom:16px">Sin proveedores asignados aún. Agrega el reparto abajo.</p>
+  )}
+
+  {/* ── Agregar proveedor al reparto ── */}
+  {editable && (
+    <details style="background:var(--bg-2);border:1px solid var(--border);padding:16px;margin-bottom:32px"
+             open={!(repartos?.length)}>
+      <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">
+        + Agregar proveedor al reparto
+      </summary>
+      <form method="POST" action={`/proveedores/${id}`} style="margin-top:12px">
+        <input type="hidden" name="_action" value="add_reparto" />
+        <div class="row">
+          <div class="col" style="flex:2">
+            <label class="label">Nombre del proveedor *</label>
+            <input class="input" name="proveedor_nombre" required placeholder="Ej. Kevin Martínez" />
+          </div>
+          <div class="col">
+            <label class="label">Rol del proveedor</label>
+            <select class="select" name="rol">
+              <option value="">— seleccionar —</option>
+              {ROLES.map((r) => <option value={r}>{r}</option>)}
+            </select>
+          </div>
+          <div class="col">
+            <label class="label">Monto MXN <small class="text-muted">(de {fmt(concepto.precio_mxn)} total)</small></label>
+            <input class="input" type="number" name="monto_mxn" required min="0" step="1" placeholder="0"
+                   id="inp_monto_rep" oninput="calcResto()" />
+          </div>
+          <div class="col">
+            <label class="label">Notas</label>
+            <input class="input" name="notas" placeholder="Opcional" />
+          </div>
+        </div>
+        <p class="text-muted" style="font-size:11px;margin-top:6px" id="txt_resto"></p>
+        <button type="submit" class="btn btn-primary" style="margin-top:8px">Agregar al reparto</button>
+      </form>
+    </details>
+  )}
+
+  {/* ── Editar datos del concepto ── */}
+  {editable && (
+    <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:24px">
+      <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">
+        Editar concepto
+      </summary>
+      <form method="POST" action={`/proveedores/${id}`} style="margin-top:16px">
+        <input type="hidden" name="_action" value="edit_concepto" />
+        <div class="row">
+          <div class="col" style="flex:2">
+            <label class="label">Nombre *</label>
+            <input class="input" name="nombre" value={concepto.nombre} required />
+          </div>
+          <div class="col">
+            <label class="label">Categoría / Rol</label>
+            <select class="select" name="rol">
+              <option value="">— sin categoría —</option>
+              {ROLES.map((r) => <option value={r} selected={concepto.rol === r}>{r}</option>)}
+            </select>
+          </div>
+          <div class="col">
+            <label class="label">Cobro al cliente MXN</label>
+            <input class="input" type="number" name="precio_mxn" value={concepto.precio_mxn} min="0" step="1" />
+          </div>
+        </div>
+        <label class="label">Descripción</label>
+        <input class="input" name="descripcion" value={concepto.descripcion ?? ''} />
+        <label class="label" style="margin-top:10px">Notas internas</label>
+        <textarea class="textarea" name="notas">{concepto.notas ?? ''}</textarea>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button type="submit" class="btn btn-primary">Guardar cambios</button>
+          <form method="POST" action={`/proveedores/${id}`} style="display:inline"
+                onsubmit="return confirm('¿Archivar este concepto?')">
+            <input type="hidden" name="_action" value="archivar" />
+            <button type="submit" class="btn btn-danger">Archivar</button>
+          </form>
+        </div>
+      </form>
+    </details>
+  )}
+</Layout>
+
+<script define:vars={{ totalRepartido, precioTotal: concepto.precio_mxn }}>
+function calcResto() {
+  const inp   = document.getElementById('inp_monto_rep');
+  const txt   = document.getElementById('txt_resto');
+  if (!inp || !txt) return;
+  const val   = parseFloat(inp.value) || 0;
+  const resto = precioTotal - totalRepartido - val;
+  const pct   = precioTotal > 0 ? Math.round(resto / precioTotal * 100) : 0;
+  txt.textContent = resto >= 0
+    ? `Margen FC Agency tras este reparto: $${Math.round(resto).toLocaleString('es-MX')} (${pct}%)`
+    : `⚠ El reparto supera el precio total por $${Math.round(Math.abs(resto)).toLocaleString('es-MX')}`;
+  txt.style.color = resto >= 0 ? '' : 'var(--danger,#e25555)';
+}
+</script>

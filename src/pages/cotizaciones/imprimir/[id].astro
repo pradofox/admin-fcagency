@@ -1,0 +1,344 @@
+---
+// Página de impresión/PDF para una cotización.
+// Abrir en nueva pestaña y usar Ctrl+P → Guardar como PDF.
+import { requireUser } from '../../../lib/session';
+import { getDB } from '../../../lib/db';
+import { formatFecha } from '../../../lib/fechas';
+
+const user = requireUser(Astro);
+const db   = getDB(Astro);
+const { id } = Astro.params;
+
+const cot = await db
+  .prepare(`SELECT c.*, cl.nombre as cliente_nombre FROM cotizaciones c LEFT JOIN clientes cl ON cl.id = c.cliente_id WHERE c.id = ?`)
+  .bind(id).first<any>();
+if (!cot) return Astro.redirect('/cotizaciones');
+
+const { results: lineas } = await db
+  .prepare('SELECT * FROM lineas_cotizacion WHERE cotizacion_id = ? ORDER BY orden')
+  .bind(id).all<any>();
+
+const totalCobrado    = (lineas ?? []).reduce((s: number, l: any) => s + (l.precio_unitario ?? 0), 0);
+const totalProveedores = Math.round(totalCobrado * 0.8);
+const totalUtilidad   = totalCobrado - totalProveedores;
+
+const fmt    = (n: number) => `$${Math.round(n).toLocaleString('es-MX')} MXN`;
+const fechaHoy = new Date().toLocaleDateString('es-MX', { year: 'numeric', month: 'long', day: 'numeric' });
+---
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cotización {cot.numero} — FC Agency</title>
+  <style>
+    :root {
+      --gold: #C9A84C;
+      --dark: #0E0E0E;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'DM Sans', 'Helvetica Neue', sans-serif;
+      font-size: 13px;
+      color: #111;
+      background: #fff;
+      padding: 40px;
+      max-width: 860px;
+      margin: 0 auto;
+    }
+
+    /* ── Botón de impresión — solo visible en pantalla ── */
+    .print-btn {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 32px;
+    }
+    .btn {
+      padding: 8px 18px;
+      border: 1px solid #ccc;
+      background: #fff;
+      cursor: pointer;
+      font-size: 13px;
+      border-radius: 3px;
+      text-decoration: none;
+      color: #111;
+    }
+    .btn-primary {
+      background: var(--gold);
+      color: #000;
+      font-weight: 700;
+      border-color: var(--gold);
+    }
+
+    /* ── Cabecera ── */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 32px;
+      padding-bottom: 24px;
+      border-bottom: 2px solid #111;
+    }
+    .brand {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+    .brand-sub {
+      font-size: 11px;
+      color: #666;
+      margin-top: 2px;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    .cot-meta {
+      text-align: right;
+    }
+    .cot-num {
+      font-size: 20px;
+      font-weight: 800;
+      color: var(--gold);
+      letter-spacing: .08em;
+    }
+    .cot-estado {
+      display: inline-block;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      border: 1px solid #ccc;
+      padding: 2px 8px;
+      margin-top: 4px;
+      border-radius: 2px;
+    }
+
+    /* ── Info general ── */
+    .info-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-bottom: 32px;
+    }
+    .info-block label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      color: #888;
+      display: block;
+      margin-bottom: 4px;
+    }
+    .info-block p {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    /* ── Tabla de servicios ── */
+    h3 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .15em;
+      color: #888;
+      margin-bottom: 10px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 24px;
+    }
+    th {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: #888;
+      border-bottom: 1px solid #ddd;
+      padding: 6px 8px;
+      text-align: left;
+    }
+    th.right, td.right { text-align: right; }
+    td {
+      padding: 10px 8px;
+      border-bottom: 1px solid #f0f0f0;
+      vertical-align: top;
+    }
+    .chip-sm {
+      display: inline-block;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      border: 1px solid #ddd;
+      padding: 1px 6px;
+      border-radius: 2px;
+      color: #666;
+      white-space: nowrap;
+    }
+    tfoot td {
+      border-top: 2px solid #111;
+      font-weight: 700;
+      font-size: 15px;
+      padding: 12px 8px;
+    }
+    .total-gold { color: var(--gold); }
+
+    /* ── Resumen financiero ── */
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 32px;
+    }
+    .summary-card {
+      border: 1px solid #ddd;
+      padding: 12px;
+      border-radius: 3px;
+    }
+    .summary-card .label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: #888;
+      margin-bottom: 4px;
+    }
+    .summary-card .value {
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .gold { color: var(--gold); }
+    .red  { color: #c0392b; }
+    .green{ color: #27ae60; }
+
+    /* ── Notas ── */
+    .notas {
+      border: 1px solid #ddd;
+      padding: 16px;
+      border-radius: 3px;
+      margin-bottom: 24px;
+    }
+    .notas p {
+      white-space: pre-wrap;
+      font-size: 13px;
+      color: #444;
+      line-height: 1.6;
+    }
+
+    /* ── Footer ── */
+    .footer {
+      margin-top: 40px;
+      padding-top: 16px;
+      border-top: 1px solid #eee;
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #999;
+    }
+
+    /* ── Print styles ── */
+    @media print {
+      .print-btn { display: none !important; }
+      body { padding: 20px; }
+      @page { margin: 1.5cm; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="print-btn">
+    <button class="btn btn-primary" onclick="window.print()">Imprimir / Guardar PDF</button>
+    <a href={`/cotizaciones/${id}`} class="btn">← Volver</a>
+  </div>
+
+  {/* Encabezado */}
+  <div class="header">
+    <div>
+      <div class="brand">FC Agency</div>
+      <div class="brand-sub">admin.fcagency.mx</div>
+    </div>
+    <div class="cot-meta">
+      <div class="cot-num">{cot.numero}</div>
+      <div><span class="cot-estado">{cot.estado}</span></div>
+      <div style="font-size:11px;color:#888;margin-top:6px">{fechaHoy}</div>
+    </div>
+  </div>
+
+  {/* Info general */}
+  <div class="info-grid">
+    <div>
+      <div class="info-block">
+        <label>Para</label>
+        <p>{cot.cliente_nombre ?? cot.cliente_libre ?? '—'}</p>
+      </div>
+    </div>
+    <div>
+      <div class="info-block">
+        <label>Concepto</label>
+        <p>{cot.titulo}</p>
+      </div>
+      {cot.fecha_vencimiento && (
+        <div class="info-block" style="margin-top:12px">
+          <label>Válida hasta</label>
+          <p>{formatFecha(cot.fecha_vencimiento)}</p>
+        </div>
+      )}
+    </div>
+  </div>
+
+  {/* Tabla de servicios */}
+  {lineas && lineas.length > 0 && (
+    <div>
+      <h3>Servicios</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Rol</th>
+            <th>Descripción</th>
+            <th class="right">Importe</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(lineas as any[]).map((l) => (
+            <tr>
+              <td style="width:110px">
+                {l.rol && <span class="chip-sm">{l.rol}</span>}
+              </td>
+              <td>
+                <div style="font-weight:600">{l.descripcion}</div>
+                {l.proveedor_nombre && <div style="font-size:11px;color:#888;margin-top:2px">{l.proveedor_nombre}</div>}
+              </td>
+              <td class="right" style="white-space:nowrap;font-weight:600">{fmt(l.precio_unitario ?? 0)}</td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="2" style="text-align:right">Total</td>
+            <td class="right total-gold">{fmt(totalCobrado)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  )}
+
+  {/* Notas para el cliente */}
+  {cot.notas && (
+    <div class="notas">
+      <h3 style="margin-bottom:8px">Notas</h3>
+      <p>{cot.notas}</p>
+    </div>
+  )}
+
+  {/* Footer */}
+  <div class="footer">
+    <span>{cot.numero} — {cot.titulo}</span>
+    <span>FC Agency · admin.fcagency.mx</span>
+  </div>
+
+  <script>
+    // Auto-abrir diálogo de impresión si viene con ?print=1
+    if (new URLSearchParams(location.search).get('print') === '1') {
+      window.onload = () => setTimeout(() => window.print(), 300);
+    }
+  </script>
+</body>
+</html>

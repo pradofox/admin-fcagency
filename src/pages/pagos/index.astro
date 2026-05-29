@@ -3,6 +3,7 @@ import Layout from '../../components/Layout.astro';
 import EmptyState from '../../components/EmptyState.astro';
 import { requireUser, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
 import { formatFecha } from '../../lib/fechas';
 
 const user = requireUser(Astro);
@@ -19,7 +20,6 @@ if (Astro.request.method === 'POST' && editable) {
 
   if (action === 'pagar_linea') {
     const lineaId = form.get('linea_id') as string;
-    // Verificar que el cliente ya pagó esa producción
     const linea = await db
       .prepare(`SELECT lp.id, p.pago_cliente_estado, p.titulo
                 FROM lineas_produccion lp
@@ -33,18 +33,51 @@ if (Astro.request.method === 'POST' && editable) {
       msgErr = `No puedes marcar el pago hasta que el cliente liquide "${linea.titulo}".`;
     } else {
       await db.prepare("UPDATE lineas_produccion SET estado = 'pagado' WHERE id = ?").bind(lineaId).run();
-      msgOk = 'Pago registrado.';
+      return Astro.redirect('/pagos?tab=pagos');
     }
   }
 
   if (action === 'cliente_pago') {
     const prodId = form.get('prod_id') as string;
-    await db.prepare("UPDATE producciones SET pago_cliente_estado = 'pagado', updated_at = ? WHERE id = ?").bind(now(), prodId).run();
-    msgOk = 'Cobro registrado.';
+    const ts = now();
+    const fechaHoy = new Date().toISOString().slice(0, 10);
+
+    // Marcar producción como cobrada
+    const prod = await db.prepare('SELECT titulo FROM producciones WHERE id = ?').bind(prodId).first<any>();
+    await db.prepare("UPDATE producciones SET pago_cliente_estado = 'pagado', updated_at = ? WHERE id = ?").bind(ts, prodId).run();
+
+    // Auto-crear tareas: pagar a cada proveedor/modelo de esta producción
+    const { results: lineasPend } = await db
+      .prepare("SELECT id, nombre_libre, rol, pago_proveedor FROM lineas_produccion WHERE produccion_id = ? AND estado = 'pendiente'")
+      .bind(prodId).all<any>();
+
+    for (const l of (lineasPend ?? [])) {
+      if (!l.nombre_libre && !l.rol) continue;
+      const nombre   = l.nombre_libre ?? l.rol;
+      const monto    = l.pago_proveedor ? ` ($${Math.round(l.pago_proveedor).toLocaleString('es-MX')})` : '';
+      const tarea    = `Pagar a ${nombre}${monto} — ${prod?.titulo ?? 'producción'}`;
+      await db
+        .prepare(`INSERT INTO acciones_calendario (id, fecha, tarea, produccion_id, prioridad, estado, asignado_por, created_at, updated_at)
+                  VALUES (?, ?, ?, ?, 'Alta', 'pendiente', ?, ?, ?)`)
+        .bind(newId(), fechaHoy, tarea, prodId, user.id, ts, ts)
+        .run();
+    }
+
+    const ntareas = lineasPend?.length ?? 0;
+    return Astro.redirect(`/pagos?tab=cobros&tareas=${ntareas}`);
   }
 }
 
-const tab = Astro.url.searchParams.get('tab') ?? 'cobros';
+const tabRaw = Astro.url.searchParams.get('tab');
+const tab = ['cobros', 'pagos', 'pagados'].includes(tabRaw ?? '') ? tabRaw! : 'cobros';
+
+// Flash message de tareas auto-creadas
+const tareasMsgN = Astro.url.searchParams.get('tareas');
+const tareasMsg = tareasMsgN !== null
+  ? (Number(tareasMsgN) > 0
+      ? `✓ Ingreso registrado — ${tareasMsgN} tarea${Number(tareasMsgN) !== 1 ? 's' : ''} de pago creada${Number(tareasMsgN) !== 1 ? 's' : ''} en Tareas`
+      : '✓ Ingreso registrado.')
+  : null;
 
 // ── COBROS ── Producciones con pago de cliente pendiente ─────────────────────
 const { results: cobros } = await db
@@ -77,12 +110,35 @@ const { results: pagos } = await db
   )
   .all<any>();
 
+// ── PAGADOS ── Líneas ya pagadas ──────────────────────────────────────────────
+const { results: pagados } = await db
+  .prepare(
+    `SELECT lp.id as linea_id, lp.nombre_libre, lp.rol, lp.cobro_cliente, lp.pago_proveedor,
+            p.id as prod_id, p.titulo, p.fecha_inicio,
+            c.nombre as cliente_nombre
+     FROM lineas_produccion lp
+     JOIN producciones p ON p.id = lp.produccion_id
+     LEFT JOIN clientes c ON c.id = p.cliente_id
+     WHERE lp.estado = 'pagado'
+     ORDER BY p.fecha_inicio DESC, lp.nombre_libre ASC
+     LIMIT 100`
+  )
+  .all<any>();
+
 // Totales
-const totalCobrar    = cobros?.reduce((s: number, r: any) => s + (r.total_cobrar ?? 0), 0) ?? 0;
+const totalCobrar     = cobros?.reduce((s: number, r: any) => s + (r.total_cobrar ?? 0), 0) ?? 0;
 const pagosBloqueados = pagos?.filter((r: any) => r.pago_cliente_estado !== 'pagado') ?? [];
 const pagosLibres     = pagos?.filter((r: any) => r.pago_cliente_estado === 'pagado')  ?? [];
 const totalPagar      = pagosLibres.reduce((s: number, r: any) => s + (r.pago_proveedor ?? 0), 0);
 const totalBloqueado  = pagosBloqueados.reduce((s: number, r: any) => s + (r.pago_proveedor ?? 0), 0);
+
+// Utilidades
+const utilidadDisponible = pagosLibres.reduce(
+  (s: number, r: any) => s + ((r.cobro_cliente ?? 0) - (r.pago_proveedor ?? 0)), 0);
+const utilidadBloqueada  = pagosBloqueados.reduce(
+  (s: number, r: any) => s + ((r.cobro_cliente ?? 0) - (r.pago_proveedor ?? 0)), 0);
+const utilidadRealizada  = pagados?.reduce(
+  (s: number, r: any) => s + ((r.cobro_cliente ?? 0) - (r.pago_proveedor ?? 0)), 0) ?? 0;
 
 const fmt = (n: number | null | undefined) =>
   n != null && n > 0 ? `$${Math.round(n).toLocaleString('es-MX')}` : '$0';
@@ -94,10 +150,11 @@ const fmt = (n: number | null | undefined) =>
     <a href="/api/pagos/export" class="btn btn-sm">Exportar CSV</a>
   </div>
 
-  {msgOk && <p class="text-ok" style="margin-bottom:16px">{msgOk}</p>}
-  {msgErr && <p class="text-danger" style="margin-bottom:16px">{msgErr}</p>}
+  {msgOk     && <p class="text-ok"    style="margin-bottom:16px">{msgOk}</p>}
+  {tareasMsg && <p class="text-ok"    style="margin-bottom:16px;display:flex;gap:10px;align-items:center">{tareasMsg} <a href="/tareas" class="btn btn-sm">Ver Tareas →</a></p>}
+  {msgErr    && <p class="text-danger" style="margin-bottom:16px">{msgErr}</p>}
 
-  <div class="row" style="margin-bottom:24px">
+  <div class="row" style="margin-bottom:12px">
     <div class="col card">
       <div class="card-meta">Por cobrar a clientes</div>
       <div class="card-title mono" style="color:#e9b949">{fmt(totalCobrar)}</div>
@@ -115,6 +172,24 @@ const fmt = (n: number | null | undefined) =>
     </div>
   </div>
 
+  <div class="row" style="margin-bottom:24px">
+    <div class="col card" style="border-left:3px solid var(--gold)">
+      <div class="card-meta">Utilidad disponible</div>
+      <div class="card-title mono" style="color:var(--gold)">{fmt(utilidadDisponible)}</div>
+      <small class="text-muted">Cliente cobrado, proveedor sin pagar</small>
+    </div>
+    <div class="col card" style="border-left:3px solid #666">
+      <div class="card-meta">Utilidad pendiente</div>
+      <div class="card-title mono text-muted">{fmt(utilidadBloqueada)}</div>
+      <small class="text-muted">Esperando cobro al cliente</small>
+    </div>
+    <div class="col card" style="border-left:3px solid var(--text-ok,#4ade80)">
+      <div class="card-meta">Utilidad realizada</div>
+      <div class="card-title mono text-ok">{fmt(utilidadRealizada)}</div>
+      <small class="text-muted">Ya cobrado y ya pagado ({pagados?.length ?? 0} líneas)</small>
+    </div>
+  </div>
+
   <!-- Tabs -->
   <div class="filters" style="margin-bottom:24px">
     <a href="/pagos?tab=cobros" class={`filter-chip ${tab === 'cobros' ? 'active' : ''}`}>
@@ -122,6 +197,9 @@ const fmt = (n: number | null | undefined) =>
     </a>
     <a href="/pagos?tab=pagos" class={`filter-chip ${tab === 'pagos' ? 'active' : ''}`}>
       Pagos a proveedores {pagos?.length ? `(${pagos.length})` : ''}
+    </a>
+    <a href="/pagos?tab=pagados" class={`filter-chip ${tab === 'pagados' ? 'active' : ''}`}>
+      Pagados {pagados?.length ? `(${pagados.length})` : ''}
     </a>
   </div>
 
@@ -162,6 +240,38 @@ const fmt = (n: number | null | undefined) =>
       </div>
     ) : (
       <EmptyState title="Sin cobros pendientes" message="Todas las producciones tienen el pago del cliente al día." />
+    )
+  )}
+
+  {tab === 'pagados' && (
+    pagados && pagados.length > 0 ? (
+      <div>
+        <div class="table-card">
+          <table>
+            <thead>
+              <tr>
+                <th>Proveedor</th><th>Rol</th><th>Producción</th><th>Cliente</th>
+                <th class="right">Cobrado</th><th class="right">Pagado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pagados.map((r: any) => (
+                <tr>
+                  <td><strong>{r.nombre_libre ?? '—'}</strong></td>
+                  <td class="text-muted">{r.rol}</td>
+                  <td><a href={`/producciones/${r.prod_id}`} style="color:var(--gold)">{r.titulo}</a></td>
+                  <td class="text-muted">{r.cliente_nombre ?? '—'}</td>
+                  <td class="right mono">{fmt(r.cobro_cliente)}</td>
+                  <td class="right mono text-ok">{fmt(r.pago_proveedor)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p class="text-muted" style="font-size:12px;margin-top:8px">Mostrando últimos {pagados.length} pagos completados.</p>
+      </div>
+    ) : (
+      <EmptyState title="Sin pagos completados" message="Aún no se ha registrado ningún pago a proveedor." />
     )
   )}
 

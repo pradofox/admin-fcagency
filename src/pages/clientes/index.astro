@@ -119,7 +119,7 @@ const fmt = (n: number | null) =>
         <article class="card" style={c.es_frecuente ? 'border-left:3px solid var(--gold)' : ''}>
           <div class="card-title">
             {c.es_frecuente ? <span style="color:var(--gold);margin-right:6px">★</span> : null}
-            {c.nombre}
+            <a href={`/clientes/${c.id}`} style="color:inherit;text-decoration:none">{c.nombre}</a>
           </div>
           <div class="card-meta">
             {c.empresa && <span class="chip">{c.empresa}</span>}

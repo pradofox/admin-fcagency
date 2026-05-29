@@ -33,23 +33,34 @@ if (Astro.request.method === 'POST' && editable) {
   if (action === 'add_membresia') {
     const planId = form.get('plan_id') as string;
     const fechaInicio = (form.get('fecha_inicio') as string) || new Date().toISOString().slice(0, 10);
-    const plan = await db.prepare('SELECT duracion_dias, precio_mxn FROM planes_district WHERE id = ?').bind(planId).first<any>();
+    const plan = await db.prepare('SELECT duracion_dias, precio_mxn, precio_descuento_mxn FROM planes_district WHERE id = ?').bind(planId).first<any>();
     if (!plan) {
       error = 'Plan inválido.';
     } else {
       const fp = new Date(fechaInicio + 'T00:00:00Z');
       fp.setUTCDate(fp.getUTCDate() + plan.duracion_dias);
       const fechaProxPago = fp.toISOString().slice(0, 10);
-      const precioPactado = Number(form.get('precio_pactado_mxn')) || plan.precio_mxn;
+      const precioBase = plan.precio_descuento_mxn ?? plan.precio_mxn;
+      const precioPactado = Number(form.get('precio_pactado_mxn')) || precioBase;
+      // Auto-generar matrícula
+      const lastMat = await db
+        .prepare("SELECT matricula FROM membresias_district WHERE matricula IS NOT NULL ORDER BY matricula DESC LIMIT 1")
+        .first<any>();
+      let nextMatNum = 1;
+      if (lastMat?.matricula) {
+        const mMatch = /MAT-(\d+)/.exec(lastMat.matricula);
+        if (mMatch) nextMatNum = parseInt(mMatch[1]) + 1;
+      }
+      const matricula = `MAT-${String(nextMatNum).padStart(3, '0')}`;
       const ts = now();
       // Desactivar membresias anteriores activas
       await db.prepare("UPDATE membresias_district SET estado = 'finalizada', updated_at = ? WHERE miembro_id = ? AND estado = 'activa'").bind(ts, id).run();
       await db
         .prepare(
-          `INSERT INTO membresias_district (id, miembro_id, plan_id, fecha_inicio, fecha_proximo_pago, estado, precio_pactado_mxn, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'activa', ?, ?, ?)`
+          `INSERT INTO membresias_district (id, miembro_id, plan_id, fecha_inicio, fecha_proximo_pago, estado, precio_pactado_mxn, matricula, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'activa', ?, ?, ?, ?)`
         )
-        .bind(newId(), id, planId, fechaInicio, fechaProxPago, precioPactado, ts, ts)
+        .bind(newId(), id, planId, fechaInicio, fechaProxPago, precioPactado, matricula, ts, ts)
         .run();
       return Astro.redirect(`/district/miembros/${id}`);
     }
@@ -94,10 +105,15 @@ if (Astro.request.method === 'POST' && editable) {
     };
     await db
       .prepare(
-        `UPDATE miembros_district SET nombre = ?, email = ?, whatsapp = ?, empresa = ?, instagram = ?, notas = ?, updated_at = ?
+        `UPDATE miembros_district
+         SET nombre = ?, email = ?, whatsapp = ?, empresa = ?, instagram = ?, notas = ?,
+             rfc = ?, razon_social = ?, regimen_fiscal = ?, uso_cfdi = ?, direccion_fiscal = ?,
+             updated_at = ?
          WHERE id = ?`
       )
-      .bind(nombre, get('email'), get('whatsapp'), get('empresa'), get('instagram'), get('notas'), now(), id)
+      .bind(nombre, get('email'), get('whatsapp'), get('empresa'), get('instagram'), get('notas'),
+            get('rfc'), get('razon_social'), get('regimen_fiscal'), get('uso_cfdi'), get('direccion_fiscal'),
+            now(), id)
       .run();
     saved = true;
   }
@@ -117,8 +133,21 @@ const { results: membresias } = await db
   .bind(id)
   .all<any>();
 
+const { results: historialPagos } = await db
+  .prepare(
+    `SELECT pd.id, pd.monto_mxn, pd.fecha_pago, pd.metodo, pd.notas,
+            p.nombre as plan_nombre
+     FROM pagos_district pd
+     LEFT JOIN membresias_district m ON m.id = pd.membresia_id
+     LEFT JOIN planes_district p ON p.id = m.plan_id
+     WHERE pd.miembro_id = ?
+     ORDER BY pd.fecha_pago DESC, pd.created_at DESC`
+  )
+  .bind(id)
+  .all<any>();
+
 const { results: planesDisponibles } = await db
-  .prepare("SELECT id, nombre, precio_mxn, duracion_dias FROM planes_district WHERE activo = 1 ORDER BY tipo, precio_mxn")
+  .prepare("SELECT id, nombre, precio_mxn, precio_descuento_mxn, duracion_dias FROM planes_district WHERE activo = 1 ORDER BY tipo, precio_mxn")
   .all<any>();
 
 const membresiaActiva = membresias?.find((m: any) => m.estado === 'activa');
@@ -166,7 +195,10 @@ const { results: reservasMiembro } = await db
 
   {membresiaActiva ? (
     <div class="card" style={`margin-bottom:24px;${venc ? 'border-left:3px solid var(--danger,#e25555)' : 'border-left:3px solid var(--gold)'}`}>
-      <div class="card-meta">Membresía vigente</div>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div class="card-meta">Membresía vigente</div>
+        {membresiaActiva.matricula && <span class="mono" style="font-size:11px;color:var(--gold);letter-spacing:.12em">{membresiaActiva.matricula}</span>}
+      </div>
       <div class="row" style="margin-top:8px">
         <div class="col">
           <div class="card-title">{membresiaActiva.plan_nombre}</div>
@@ -222,9 +254,13 @@ const { results: reservasMiembro } = await db
               <label class="label">Plan *</label>
               <select class="select" name="plan_id" required>
                 <option value="">— elige plan —</option>
-                {planesDisponibles?.map((p: any) => (
-                  <option value={p.id}>{p.nombre} (${Math.round(p.precio_mxn).toLocaleString('es-MX')} / {p.duracion_dias}d)</option>
-                ))}
+                {planesDisponibles?.map((p: any) => {
+                  const precio = p.precio_descuento_mxn ?? p.precio_mxn;
+                  const etiqueta = p.precio_descuento_mxn
+                    ? `${p.nombre} ($${Math.round(p.precio_descuento_mxn).toLocaleString('es-MX')} promo / ${p.duracion_dias}d)`
+                    : `${p.nombre} ($${Math.round(p.precio_mxn).toLocaleString('es-MX')} / ${p.duracion_dias}d)`;
+                  return <option value={p.id}>{etiqueta}</option>;
+                })}
               </select>
             </div>
             <div class="col">
@@ -243,28 +279,28 @@ const { results: reservasMiembro } = await db
     </details>
   )}
 
-  <h2>Historial de membresías</h2>
-  {membresias && membresias.length > 0 ? (
+  <h2>Historial de pagos</h2>
+  {historialPagos && historialPagos.length > 0 ? (
     <div class="table-card" style="margin-bottom:32px">
       <table>
         <thead>
-          <tr><th>Plan</th><th>Inicio</th><th>Próximo pago</th><th>Estado</th><th class="right">Precio</th></tr>
+          <tr><th>Fecha</th><th>Plan</th><th>Método</th><th>Notas</th><th class="right">Monto</th></tr>
         </thead>
         <tbody>
-          {membresias.map((m: any) => (
+          {historialPagos.map((p: any) => (
             <tr>
-              <td><strong>{m.plan_nombre}</strong> <span class="text-muted">{m.plan_tipo}</span></td>
-              <td class="mono">{formatFecha(m.fecha_inicio)}</td>
-              <td class="mono">{formatFecha(m.fecha_proximo_pago)}</td>
-              <td><span class={`chip ${m.estado === 'activa' ? 'chip-ok' : 'chip'}`}>{m.estado}</span></td>
-              <td class="right mono">${Math.round(m.precio_pactado_mxn ?? 0).toLocaleString('es-MX')}</td>
+              <td class="mono">{formatFecha(p.fecha_pago)}</td>
+              <td class="text-muted">{p.plan_nombre ?? '—'}</td>
+              <td><span class="chip" style="font-size:10px">{p.metodo ?? 'efectivo'}</span></td>
+              <td class="text-muted" style="font-size:12px">{p.notas ?? ''}</td>
+              <td class="right mono text-ok">${Math.round(p.monto_mxn ?? 0).toLocaleString('es-MX')}</td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
   ) : (
-    <p class="text-muted" style="margin-bottom:32px">Sin membresías registradas.</p>
+    <p class="text-muted" style="margin-bottom:32px">Sin pagos registrados aún.</p>
   )}
 
   <h2>Próximas reservas</h2>
@@ -309,6 +345,47 @@ const { results: reservasMiembro } = await db
     </div>
     <label class="label">Notas</label>
     <textarea class="textarea" name="notas">{miembro.notas ?? ''}</textarea>
+
+    {/* Datos fiscales */}
+    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
+      <div style="font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--gold);margin-bottom:12px">Datos fiscales</div>
+      <div class="row">
+        <div class="col">
+          <label class="label">RFC</label>
+          <input class="input" name="rfc" value={miembro.rfc ?? ''} placeholder="XAXX010101000" style="text-transform:uppercase" />
+        </div>
+        <div class="col" style="flex:2">
+          <label class="label">Razón social</label>
+          <input class="input" name="razon_social" value={miembro.razon_social ?? ''} placeholder="Nombre completo o empresa tal como aparece en el SAT" />
+        </div>
+      </div>
+      <div class="row">
+        <div class="col">
+          <label class="label">Régimen fiscal</label>
+          <input class="input" name="regimen_fiscal" value={miembro.regimen_fiscal ?? ''} placeholder="Ej. 626 - RESICO" list="regimenes_list" />
+          <datalist id="regimenes_list">
+            <option value="601 - General de Ley Personas Morales" />
+            <option value="612 - Personas Físicas con Actividades Empresariales" />
+            <option value="616 - Sin obligaciones fiscales" />
+            <option value="621 - Incorporación Fiscal" />
+            <option value="626 - Régimen Simplificado de Confianza (RESICO)" />
+          </datalist>
+        </div>
+        <div class="col">
+          <label class="label">Uso de CFDI</label>
+          <input class="input" name="uso_cfdi" value={miembro.uso_cfdi ?? ''} placeholder="Ej. G03 - Gastos en general" list="cfdi_list" />
+          <datalist id="cfdi_list">
+            <option value="G01 - Adquisición de mercancias" />
+            <option value="G03 - Gastos en general" />
+            <option value="I08 - Otra maquinaria y equipo" />
+            <option value="S01 - Sin efectos fiscales" />
+          </datalist>
+        </div>
+      </div>
+      <label class="label">Dirección fiscal</label>
+      <textarea class="textarea" name="direccion_fiscal" rows="2" placeholder="Calle, No., Colonia, CP, Ciudad, Estado">{miembro.direccion_fiscal ?? ''}</textarea>
+    </div>
+
     {editable && (
       <div class="form-actions"><button type="submit" class="btn btn-primary">Guardar cambios</button></div>
     )}
