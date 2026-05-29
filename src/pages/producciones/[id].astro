@@ -6,6 +6,7 @@ import { requireUser, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 import { formatFecha } from '../../lib/fechas';
+import { enviarAvisosProduccion, recolectarDestinatarios, type GrupoAviso } from '../../lib/avisos';
 
 const user = requireUser(Astro);
 const editable = canEdit(user);
@@ -14,6 +15,7 @@ const { id } = Astro.params;
 
 let error: string | null = null;
 let saved = false;
+let avisoMsg: string | null = null;
 
 interface Linea {
   id: string;
@@ -26,6 +28,7 @@ interface Linea {
   pago_proveedor: number;
   estado: string;
   notas: string | null;
+  hora_llamado: string | null;
 }
 
 if (Astro.request.method === 'POST' && editable) {
@@ -72,6 +75,7 @@ if (Astro.request.method === 'POST' && editable) {
     const cobro = Number(form.get('linea_cobro')) || 0;
     const comision = Number(form.get('linea_comision')) || 20;
     const modeloId = (form.get('linea_modelo_id') as string)?.trim() || null;
+    const horaLlamado = (form.get('linea_hora_llamado') as string)?.trim() || null;
     // Si se eligió un modelo registrado y no se escribió nombre, usar el del modelo
     if (modeloId && !nombre) {
       const mm = await db.prepare('SELECT nombre FROM modelos WHERE id = ?').bind(modeloId).first<any>();
@@ -80,12 +84,37 @@ if (Astro.request.method === 'POST' && editable) {
     await db
       .prepare(
         `INSERT INTO lineas_produccion (
-          id, produccion_id, rol, nombre_libre, modelo_id, cobro_cliente, comision_pct, estado, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pendiente', ?)`
+          id, produccion_id, rol, nombre_libre, modelo_id, cobro_cliente, comision_pct, hora_llamado, estado, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pendiente', ?)`
       )
-      .bind(lineaId, id, rol, nombre || null, modeloId, cobro, comision, ts)
+      .bind(lineaId, id, rol, nombre || null, modeloId, cobro, comision, horaLlamado, ts)
       .run();
     return Astro.redirect(`/producciones/${id}`);
+  }
+
+  // ── Enviar convocatoria / recordatorio ───────────────────────────────────
+  if (action === 'enviar_avisos') {
+    const tipo = (form.get('tipo') as string) === 'recordatorio' ? 'recordatorio' : 'convocatoria';
+    const grupos: GrupoAviso[] = [];
+    if (form.get('g_modelos') === '1') grupos.push('modelos');
+    if (form.get('g_proveedores') === '1') grupos.push('proveedores');
+    if (form.get('g_cliente') === '1') grupos.push('cliente');
+    if (grupos.length === 0) {
+      avisoMsg = 'Selecciona al menos un grupo de destinatarios.';
+    } else {
+      const prodRow = await db.prepare('SELECT * FROM producciones WHERE id = ?').bind(id).first<any>();
+      const cli = prodRow?.cliente_id
+        ? await db.prepare('SELECT nombre FROM clientes WHERE id = ?').bind(prodRow.cliente_id).first<any>()
+        : null;
+      const runtime = (Astro.locals as any).runtime;
+      const resendKey = runtime?.env?.RESEND_API_KEY;
+      const r = await enviarAvisosProduccion(db, prodRow, resendKey, {
+        tipo, grupos, clienteNombre: cli?.nombre ?? null,
+      });
+      avisoMsg = r.enviados === 0 && r.errores === 0
+        ? 'No había destinatarios con correo en los grupos elegidos.'
+        : `${tipo === 'recordatorio' ? 'Recordatorio' : 'Convocatoria'}: ${r.enviados} enviado(s)${r.errores ? `, ${r.errores} con error` : ''}.`;
+    }
   }
 
   if (action === 'delete_linea') {
@@ -115,9 +144,11 @@ if (Astro.request.method === 'POST' && editable) {
     return Astro.redirect(`/producciones/${id}`);
   }
 
-  // Update producción
+  // Update producción (solo cuando el form no trae _action)
   const titulo = (form.get('titulo') as string)?.trim();
-  if (!titulo) {
+  if (action) {
+    // ya manejado arriba (p. ej. enviar_avisos que no redirige)
+  } else if (!titulo) {
     error = 'El título es obligatorio.';
   } else {
     const get = (k: string) => {
@@ -179,7 +210,7 @@ const clientes = (await db.prepare('SELECT id, nombre FROM clientes ORDER BY nom
 const { results: lineas } = await db
   .prepare(
     `SELECT id, rol, nombre_libre, proveedor_id, modelo_id,
-            cobro_cliente, comision_pct, pago_proveedor, estado, notas
+            cobro_cliente, comision_pct, pago_proveedor, estado, notas, hora_llamado
      FROM lineas_produccion WHERE produccion_id = ? ORDER BY created_at`
   )
   .bind(id)
@@ -218,6 +249,29 @@ const { results: modelosAsignados } = await db
 // Nombres resueltos para la ficha
 const clienteNombre = prod.cliente_id ? (clientes.find((c: any) => c.id === prod.cliente_id)?.nombre ?? null) : null;
 const marcaNombre   = prod.marca_id ? (marcas.find((m: any) => m.id === prod.marca_id)?.nombre ?? null) : null;
+
+// ── Avisos: destinatarios disponibles e historial ──────────────────────────
+const destModelos = await recolectarDestinatarios(db, prod, ['modelos']);
+const destProveedores = await recolectarDestinatarios(db, prod, ['proveedores']);
+const destCliente = await recolectarDestinatarios(db, prod, ['cliente']);
+
+const { results: notifsHist } = await db
+  .prepare(
+    `SELECT tipo, destinatario_tipo, destinatario_nombre, email, estado, detalle, enviado_en
+     FROM notificaciones WHERE produccion_id = ? ORDER BY enviado_en DESC LIMIT 50`
+  )
+  .bind(id)
+  .all<any>();
+
+function fechaHora(ms: number): string {
+  try {
+    return new Intl.DateTimeFormat('es-MX', {
+      day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
+    }).format(new Date(ms));
+  } catch {
+    return '';
+  }
+}
 
 const totalCobro = (lineas ?? []).reduce((a, l) => a + (l.cobro_cliente || 0), 0);
 const totalPago = (lineas ?? []).reduce((a, l) => a + (l.pago_proveedor || 0), 0);
@@ -326,6 +380,61 @@ const ROLES = [
     )}
   </div>
 
+  {/* ── Avisos y recordatorios ── */}
+  <div class="card" style="margin-bottom:24px">
+    <div class="card-meta" style="margin-bottom:10px">Avisos y recordatorios</div>
+    {avisoMsg && (
+      <p style="margin:0 0 14px;padding:9px 12px;background:var(--bg-3,#1a1a1a);border-left:3px solid var(--gold);font-size:13px">{avisoMsg}</p>
+    )}
+    {editable ? (
+      <form method="POST" action={`/producciones/${id}`}>
+        <input type="hidden" name="_action" value="enviar_avisos" />
+        <p class="text-muted" style="font-size:12px;margin:0 0 12px">
+          Envía la convocatoria (detalles de la producción) o un recordatorio por correo a los grupos elegidos.
+          Solo se envía a quienes tienen email registrado.
+        </p>
+        <div style="display:flex;flex-wrap:wrap;gap:18px;margin-bottom:14px">
+          <label style={`display:flex;align-items:center;gap:7px;font-size:13px;${destModelos.length === 0 ? 'opacity:.45' : ''}`}>
+            <input type="checkbox" name="g_modelos" value="1" checked={destModelos.length > 0} disabled={destModelos.length === 0} />
+            Modelos <span class="text-muted mono">({destModelos.length})</span>
+          </label>
+          <label style={`display:flex;align-items:center;gap:7px;font-size:13px;${destProveedores.length === 0 ? 'opacity:.45' : ''}`}>
+            <input type="checkbox" name="g_proveedores" value="1" checked={destProveedores.length > 0} disabled={destProveedores.length === 0} />
+            Proveedores <span class="text-muted mono">({destProveedores.length})</span>
+          </label>
+          <label style={`display:flex;align-items:center;gap:7px;font-size:13px;${destCliente.length === 0 ? 'opacity:.45' : ''}`}>
+            <input type="checkbox" name="g_cliente" value="1" disabled={destCliente.length === 0} />
+            Cliente <span class="text-muted mono">({destCliente.length})</span>
+          </label>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button type="submit" name="tipo" value="convocatoria" class="btn btn-primary btn-sm">Enviar convocatoria</button>
+          <button type="submit" name="tipo" value="recordatorio" class="btn btn-sm">Enviar recordatorio</button>
+        </div>
+      </form>
+    ) : (
+      <p class="text-muted" style="font-size:12px;margin:0">Solo lectura.</p>
+    )}
+
+    {notifsHist && notifsHist.length > 0 && (
+      <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:14px">
+        <div class="card-meta" style="margin-bottom:8px">Historial de envíos</div>
+        <div style="display:flex;flex-direction:column;gap:5px">
+          {(notifsHist as any[]).map((n) => (
+            <div style="display:flex;align-items:center;gap:10px;font-size:12px;flex-wrap:wrap">
+              <span class="chip" style="font-size:10px">{n.tipo}</span>
+              <span class={`chip ${n.estado === 'enviado' ? 'chip-ok' : 'chip-danger'}`} style="font-size:10px">{n.estado}</span>
+              <span>{n.destinatario_nombre ?? n.email}</span>
+              <span class="text-muted" style="font-size:11px">{n.destinatario_tipo}</span>
+              <span class="text-muted mono" style="font-size:11px;margin-left:auto">{fechaHora(n.enviado_en)}</span>
+              {n.estado === 'error' && n.detalle && <span class="text-danger" style="font-size:11px;width:100%">{n.detalle}</span>}
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
+  </div>
+
   {/* ── Links y archivos ── */}
   {(prod.links_referencias || prod.archivos_referencias) && (
     <div class="row" style="margin-bottom:24px">
@@ -427,6 +536,7 @@ const ROLES = [
           <tr>
             <th>Rol</th>
             <th>Nombre</th>
+            <th>Llamado</th>
             <th class="right">Cobro</th>
             <th class="right">Comisión</th>
             <th class="right">Pago</th>
@@ -439,6 +549,7 @@ const ROLES = [
             <tr>
               <td><span class="chip">{l.rol}</span></td>
               <td>{l.nombre_libre ?? <span class="text-muted">—</span>}</td>
+              <td class="mono text-muted">{l.hora_llamado ?? '—'}</td>
               <td class="right mono">{fmt(l.cobro_cliente)}</td>
               <td class="right mono text-muted">{l.comision_pct}%</td>
               <td class="right mono text-gold">{fmt(l.pago_proveedor)}</td>
@@ -495,6 +606,10 @@ const ROLES = [
         <div class="col">
           <label class="label">Nombre</label>
           <input class="input" name="linea_nombre" id="linea_nombre" placeholder="Persona o proveedor" />
+        </div>
+        <div class="col">
+          <label class="label">Hora de llamado</label>
+          <input class="input" type="time" name="linea_hora_llamado" id="linea_hora_llamado" />
         </div>
         <div class="col">
           <label class="label">Cobro al cliente (MXN)</label>
