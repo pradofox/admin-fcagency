@@ -14,13 +14,31 @@ const cot = await db
   .bind(id).first<any>();
 if (!cot) return Astro.redirect('/cotizaciones');
 
-const { results: lineas } = await db
-  .prepare('SELECT * FROM lineas_cotizacion WHERE cotizacion_id = ? ORDER BY orden')
+const { results: lineasRaw } = await db
+  .prepare(`SELECT l.*, cs.max_descuento AS _max_desc
+            FROM lineas_cotizacion l
+            LEFT JOIN conceptos_servicio cs ON cs.id = l.concepto_id
+            WHERE l.cotizacion_id = ? ORDER BY l.orden`)
   .bind(id).all<any>();
 
-const totalCobrado    = (lineas ?? []).reduce((s: number, l: any) => s + (l.precio_unitario ?? 0), 0);
-const totalProveedores = Math.round(totalCobrado * 0.8);
-const totalUtilidad   = totalCobrado - totalProveedores;
+const lineas = (lineasRaw ?? []).map((l: any) => {
+  const cant  = l.cantidad ?? 1;
+  const horas = l.horas ?? 1;
+  const sub   = l.precio_unitario ?? 0;
+  const base  = l.precio_base != null ? l.precio_base : (cant * horas > 0 ? sub / (cant * horas) : sub);
+  return { ...l, _cant: cant, _horas: horas, _base: base, _cobro: sub };
+});
+
+// Bloque de totales estilo hoja: Subtotal → Descuento (con tope) → IVA → Total.
+const subtotalSinIva = lineas.reduce((s: number, l: any) => s + l._cobro, 0);
+const topesDesc      = lineas.map((l: any) => l._max_desc).filter((v: any) => v != null && v > 0);
+const topeDescuento  = topesDesc.length ? Math.min(...topesDesc) : 100;
+const descuentoPct   = Math.min(cot.descuento_pct ?? 0, topeDescuento);
+const descuentoMonto = subtotalSinIva * descuentoPct / 100;
+const subtotalConDesc = subtotalSinIva - descuentoMonto;
+const ivaPct         = cot.iva_pct ?? 16;
+const ivaMonto       = subtotalConDesc * ivaPct / 100;
+const totalConIva    = subtotalConDesc + ivaMonto;
 
 const fmt    = (n: number) => `$${Math.round(n).toLocaleString('es-MX')} MXN`;
 const fechaHoy = new Date().toLocaleDateString('es-MX', { year: 'numeric', month: 'long', day: 'numeric' });
@@ -291,29 +309,50 @@ const fechaHoy = new Date().toLocaleDateString('es-MX', { year: 'numeric', month
       <table>
         <thead>
           <tr>
-            <th>Rol</th>
-            <th>Descripción</th>
-            <th class="right">Importe</th>
+            <th>Concepto</th>
+            <th class="right">Cant.</th>
+            <th class="right">Precio unit.</th>
+            <th class="right">Horas</th>
+            <th class="right">Subtotal</th>
           </tr>
         </thead>
         <tbody>
           {(lineas as any[]).map((l) => (
             <tr>
-              <td style="width:110px">
-                {l.rol && <span class="chip-sm">{l.rol}</span>}
-              </td>
               <td>
                 <div style="font-weight:600">{l.descripcion}</div>
-                {l.proveedor_nombre && <div style="font-size:11px;color:#888;margin-top:2px">{l.proveedor_nombre}</div>}
               </td>
-              <td class="right" style="white-space:nowrap;font-weight:600">{fmt(l.precio_unitario ?? 0)}</td>
+              <td class="right">{l._cant}</td>
+              <td class="right" style="white-space:nowrap">{fmt(l._base)}</td>
+              <td class="right">{l._horas}</td>
+              <td class="right" style="white-space:nowrap;font-weight:600">{fmt(l._cobro)}</td>
             </tr>
           ))}
         </tbody>
         <tfoot>
           <tr>
-            <td colspan="2" style="text-align:right">Total</td>
-            <td class="right total-gold">{fmt(totalCobrado)}</td>
+            <td colspan="4" style="text-align:right;font-weight:400">Subtotal sin IVA</td>
+            <td class="right">{fmt(subtotalSinIva)}</td>
+          </tr>
+          {descuentoPct > 0 && (
+            <tr>
+              <td colspan="4" style="text-align:right;font-weight:400">Descuento ({descuentoPct}%)</td>
+              <td class="right" style="color:#c0392b">−{fmt(descuentoMonto)}</td>
+            </tr>
+          )}
+          {descuentoPct > 0 && (
+            <tr>
+              <td colspan="4" style="text-align:right;font-weight:400">Subtotal con descuento</td>
+              <td class="right">{fmt(subtotalConDesc)}</td>
+            </tr>
+          )}
+          <tr>
+            <td colspan="4" style="text-align:right;font-weight:400">+ IVA {ivaPct}%</td>
+            <td class="right">{fmt(ivaMonto)}</td>
+          </tr>
+          <tr>
+            <td colspan="4" style="text-align:right">Total con IVA</td>
+            <td class="right total-gold">{fmt(totalConIva)}</td>
           </tr>
         </tfoot>
       </table>

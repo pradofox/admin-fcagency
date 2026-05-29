@@ -29,12 +29,14 @@ if (Astro.request.method === 'POST' && editable) {
     const get = (k: string) => { const v = form.get(k); return v === null || v === '' ? null : String(v).trim(); };
     const horaAdRaw = form.get('precio_hora_adicional');
     const horaAd = horaAdRaw === null || horaAdRaw === '' ? null : Number(horaAdRaw) || 0;
+    const maxDescRaw = form.get('max_descuento');
+    const maxDesc = maxDescRaw === null || maxDescRaw === '' ? null : Number(maxDescRaw) || 0;
     const ts = now();
     const id = newId();
     await db
-      .prepare(`INSERT INTO conceptos_servicio (id, nombre, rol, descripcion, precio_mxn, precio_hora_adicional, notas, activo, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
-      .bind(id, nombre, get('rol'), get('descripcion'), precio, horaAd, get('notas'), ts, ts)
+      .prepare(`INSERT INTO conceptos_servicio (id, nombre, rol, categoria, descripcion, precio_mxn, precio_hora_adicional, max_descuento, notas, activo, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
+      .bind(id, nombre, get('rol'), get('categoria'), get('descripcion'), precio, horaAd, maxDesc, get('notas'), ts, ts)
       .run();
     return Astro.redirect(`/proveedores/${id}`);
   }
@@ -45,34 +47,41 @@ const busqueda  = Astro.url.searchParams.get('q')   ?? '';
 
 const where: string[] = ['cs.activo = 1'];
 const binds: any[] = [];
-if (rolFiltro) { where.push('cs.rol = ?'); binds.push(rolFiltro); }
+if (rolFiltro) { where.push('(cs.categoria = ? OR cs.rol = ?)'); binds.push(rolFiltro, rolFiltro); }
 if (busqueda)  { where.push('cs.nombre LIKE ?'); binds.push(`%${busqueda}%`); }
 
 const { results: conceptos } = await db
   .prepare(
-    `SELECT cs.id, cs.nombre, cs.rol, cs.descripcion, cs.precio_mxn,
+    `SELECT cs.id, cs.nombre, cs.rol, cs.categoria, cs.descripcion, cs.precio_mxn, cs.max_descuento,
             COUNT(r.id)    as num_proveedores,
             COALESCE(SUM(r.monto_mxn), 0) as total_repartido
      FROM conceptos_servicio cs
      LEFT JOIN repartos_concepto r ON r.concepto_id = cs.id
      WHERE ${where.join(' AND ')}
      GROUP BY cs.id
-     ORDER BY cs.rol, cs.nombre`
+     ORDER BY cs.categoria, cs.rol, cs.nombre`
   )
   .bind(...binds)
   .all<any>();
 
-// Agrupar por rol
+// Agrupar por categoría (o rol como fallback en conceptos viejos)
 const grouped = new Map<string, any[]>();
 for (const c of (conceptos ?? [])) {
-  const key = c.rol ?? 'Sin categoría';
+  const key = c.categoria ?? c.rol ?? 'Sin categoría';
   if (!grouped.has(key)) grouped.set(key, []);
   grouped.get(key)!.push(c);
 }
-const rolesOrdenados = [
-  ...ROLES.filter((r) => grouped.has(r)),
-  ...[...grouped.keys()].filter((k) => !ROLES.includes(k))
+// Categorías de la hoja MATRIZ primero, luego roles sueltos, luego el resto.
+const CATEGORIAS_FC = [
+  'Producción editorial P.', 'Producción editorial E.', 'MODEL CAMP',
+  'RENTA DISTRICT STUDIO', 'PASARELAS', 'EXTRAS'
 ];
+const rolesOrdenados = [
+  ...CATEGORIAS_FC.filter((c) => grouped.has(c)),
+  ...ROLES.filter((r) => grouped.has(r)),
+  ...[...grouped.keys()].filter((k) => !CATEGORIAS_FC.includes(k) && !ROLES.includes(k))
+];
+const categoriasExistentes = [...new Set((conceptos ?? []).map((c: any) => c.categoria).filter(Boolean))];
 
 const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
 ---
@@ -97,16 +106,30 @@ const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
             <input class="input" name="nombre" required placeholder='Ej. "Sesión editorial 4 hrs"' />
           </div>
           <div class="col">
-            <label class="label">Categoría / Rol</label>
+            <label class="label">Categoría</label>
+            <input class="input" name="categoria" list="categorias_fc" placeholder="Ej. PASARELAS" />
+            <datalist id="categorias_fc">
+              {categoriasExistentes.map((c: any) => <option value={c}></option>)}
+            </datalist>
+          </div>
+          <div class="col">
+            <label class="label">Rol (opcional)</label>
             <select class="select" name="rol" id="sel_rol_nuevo" onchange="toggleHoraAd()">
               <option value="">— seleccionar —</option>
               {ROLES.map((r) => <option value={r}>{r}</option>)}
             </select>
           </div>
+        </div>
+        <div class="row">
           <div class="col">
             <label class="label" id="lbl_precio_nuevo">Cobro al cliente MXN *</label>
             <input class="input" type="number" name="precio_mxn" required min="0" step="1" placeholder="0" />
           </div>
+          <div class="col">
+            <label class="label">Tope de descuento %</label>
+            <input class="input" type="number" name="max_descuento" min="0" max="100" step="1" placeholder="Ej. 15" />
+          </div>
+          <div class="col"></div>
         </div>
         {/* Hora adicional — solo aplica a roles por hora (Modelo) */}
         <div id="row_hora_ad" style="display:none;background:var(--bg-3,#1a1a1a);border:1px solid var(--border);padding:12px;border-radius:4px;margin-bottom:6px">
@@ -137,6 +160,10 @@ const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
   <div class="filters" style="margin-bottom:24px">
     <a href={`/proveedores${busqueda ? '?q='+busqueda : ''}`}
        class={`filter-chip ${!rolFiltro ? 'active' : ''}`}>Todos</a>
+    {CATEGORIAS_FC.filter((c) => grouped.has(c) || rolFiltro === c).map((c) => (
+      <a href={`/proveedores?rol=${encodeURIComponent(c)}${busqueda ? '&q='+busqueda : ''}`}
+         class={`filter-chip ${rolFiltro === c ? 'active' : ''}`}>{c}</a>
+    ))}
     {ROLES.map((r) => (
       <a href={`/proveedores?rol=${encodeURIComponent(r)}${busqueda ? '&q='+busqueda : ''}`}
          class={`filter-chip ${rolFiltro === r ? 'active' : ''}`}>{r}</a>

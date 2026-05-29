@@ -31,10 +31,17 @@ if (Astro.request.method === 'POST' && editable) {
     return Astro.redirect(`/cotizaciones/${id}`);
   }
 
+  // ── Cambiar descuento / IVA ──────────────────────────────────────────────
+  if (action === 'set_descuento') {
+    const d   = Math.max(0, Math.min(100, Number(form.get('descuento_pct') ?? 0) || 0));
+    const iva = Math.max(0, Math.min(100, Number(form.get('iva_pct') ?? 16) || 0));
+    await db.prepare('UPDATE cotizaciones SET descuento_pct = ?, iva_pct = ?, updated_at = ? WHERE id = ?').bind(d, iva, now(), id).run();
+    return Astro.redirect(`/cotizaciones/${id}`);
+  }
+
   // ── Agregar concepto del catálogo ──────────────────────────────────────────
-  // Trae el reparto real del concepto: el pago a proveedores es la suma de su
-  // reparto (no el 80/20 fijo). Se guarda un snapshot para que la cotización no
-  // cambie si después editan el concepto en el catálogo.
+  // Estilo hoja: Cantidad × Precio unitario × Horas = Subtotal.
+  // El reparto a proveedores (margen interno) escala con el subtotal.
   if (action === 'add_concepto') {
     const conceptoId = form.get('concepto_id') as string;
     const concepto = conceptoId
@@ -47,53 +54,27 @@ if (Astro.request.method === 'POST' && editable) {
       const horaAd = concepto.precio_hora_adicional ?? null;
       const porHora = horaAd != null && horaAd > 0;
 
-      let repartos: any[] = [];
-      let pagoProv = 0;
-      let cobroLinea = precioBase;
-      let descripcion = concepto.nombre;
-      let provNombre: string | null = null;
-      let horasLinea: number | null = null;
-      let unidadesLinea: number | null = null;
+      const cantRaw  = form.get('cantidad');
+      const cantidad = cantRaw === null || cantRaw === '' ? 1 : Math.max(1, Number(cantRaw) || 1);
+      const horasRaw = form.get('horas');
+      const horas    = horasRaw === null || horasRaw === '' ? 1 : Math.max(1, Number(horasRaw) || 1);
 
-      if (porHora) {
-        // Concepto por hora (modelo): tarifa por hora de modelo Y por unidad.
-        // Una línea puede cubrir varios modelos a la misma tarifa:
-        //   por modelo = 1ª hora (precio_mxn) + (horas - 1) * hora_adicional
-        //   cobro línea = unidades (nº de modelos) * por modelo
-        // Ej: 5 modelos × 4 hrs = 5 primeras horas $1,000 + 15 horas $800.
-        const horasRaw = form.get('horas');
-        const horas = horasRaw === null || horasRaw === '' ? 1 : Math.max(1, Number(horasRaw) || 1);
-        const unidadesRaw = form.get('unidades');
-        const unidades = unidadesRaw === null || unidadesRaw === '' ? 1 : Math.max(1, Number(unidadesRaw) || 1);
-        const modeloNombre = (form.get('modelo_nombre') as string)?.trim() || null;
-        const porModelo = horas > 1 ? precioBase + (horas - 1) * horaAd! : precioBase;
-        cobroLinea = unidades * porModelo;
-        horasLinea = horas;
-        unidadesLinea = unidades;
-        provNombre = modeloNombre;
+      // Subtotal de la línea (lo que ve el cliente).
+      // Tiered (modelo con hora adicional): (1ª hora + extras) × cantidad.
+      // Normal: precio × cantidad × horas.
+      const subtotal = porHora
+        ? cantidad * (horas > 1 ? precioBase + (horas - 1) * horaAd! : precioBase)
+        : precioBase * cantidad * horas;
 
-        const fmtMXN = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
-        const horasTxt = `${horas % 1 === 0 ? horas : horas.toFixed(1)} hr${horas === 1 ? '' : 's'}`;
-        const unidadesTxt = `${unidades % 1 === 0 ? unidades : unidades.toFixed(1)} modelo${unidades === 1 ? '' : 's'}`;
-        // Desglose tipo: "5 h a $1,000 + 15 h a $800"
-        const hPrimeras = unidades * 1;
-        const hExtra = unidades * Math.max(0, horas - 1);
-        const desglose = horas > 1
-          ? ` (${hPrimeras % 1 === 0 ? hPrimeras : hPrimeras.toFixed(1)} h a ${fmtMXN(precioBase)} + ${hExtra % 1 === 0 ? hExtra : hExtra.toFixed(1)} h a ${fmtMXN(horaAd!)})`
-          : ` (${hPrimeras % 1 === 0 ? hPrimeras : hPrimeras.toFixed(1)} h a ${fmtMXN(precioBase)})`;
-        const base = `${concepto.nombre}${modeloNombre ? ` · ${modeloNombre}` : ''} — ${unidadesTxt} × ${horasTxt}`;
-        descripcion = unidades > 1 || horas > 1 ? `${base}${desglose}` : base;
-        // pago_proveedor null → se calcula 80% por defecto y se puede editar la línea
-        pagoProv = null as any;
-      } else {
-        // Concepto normal con reparto fijo a proveedores
-        const { results: reps } = await db
-          .prepare('SELECT proveedor_nombre, rol, monto_mxn FROM repartos_concepto WHERE concepto_id = ?')
-          .bind(conceptoId).all<any>();
-        repartos = (reps ?? []).filter((r: any) => r.proveedor_nombre);
-        pagoProv = repartos.reduce((s: number, r: any) => s + (r.monto_mxn ?? 0), 0);
-        provNombre = repartos.map((r: any) => r.proveedor_nombre).join(', ') || null;
-      }
+      // Reparto a proveedores: escala con el subtotal respecto al precio base.
+      const { results: reps } = await db
+        .prepare('SELECT proveedor_nombre, rol, monto_mxn FROM repartos_concepto WHERE concepto_id = ?')
+        .bind(conceptoId).all<any>();
+      const repartos = (reps ?? []).filter((r: any) => r.proveedor_nombre);
+      const sumRep = repartos.reduce((s: number, r: any) => s + (r.monto_mxn ?? 0), 0);
+      const factor = precioBase > 0 ? subtotal / precioBase : cantidad * horas;
+      const pagoProv = repartos.length > 0 ? Math.round(sumRep * factor) : null;
+      const provNombre = repartos.map((r: any) => r.proveedor_nombre).join(', ') || null;
 
       const maxOrden = await db
         .prepare('SELECT MAX(orden) as m FROM lineas_cotizacion WHERE cotizacion_id = ?')
@@ -101,12 +82,12 @@ if (Astro.request.method === 'POST' && editable) {
       const orden = (maxOrden?.m ?? 0) + 1;
       await db
         .prepare(`INSERT INTO lineas_cotizacion
-                    (id, cotizacion_id, descripcion, cantidad, precio_unitario, rol, proveedor_nombre, concepto_id, pago_proveedor, reparto_json, orden, horas, unidades)
-                  VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+                    (id, cotizacion_id, descripcion, cantidad, precio_unitario, precio_base, rol, proveedor_nombre, concepto_id, pago_proveedor, reparto_json, orden, horas)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(
-          newId(), id, descripcion, cobroLinea, concepto.rol ?? null,
-          provNombre, conceptoId, pagoProv, JSON.stringify(repartos), orden,
-          horasLinea, unidadesLinea
+          newId(), id, concepto.nombre, cantidad, subtotal, precioBase,
+          concepto.categoria ?? concepto.rol ?? null, provNombre, conceptoId,
+          pagoProv as any, JSON.stringify(repartos), orden, horas
         )
         .run();
       await db.prepare('UPDATE cotizaciones SET updated_at = ? WHERE id = ?').bind(now(), id).run();
@@ -116,11 +97,14 @@ if (Astro.request.method === 'POST' && editable) {
 
   // ── Agregar línea manual (servicio fuera del catálogo) ─────────────────────
   if (action === 'add_linea') {
-    const desc    = (form.get('descripcion') as string)?.trim();
-    const cobro   = Number(form.get('cobro_cliente') ?? 0) || 0;
-    const rol     = (form.get('rol') as string)?.trim() || null;
-    const prov    = (form.get('proveedor_nombre') as string)?.trim() || null;
-    const pagoRaw = form.get('pago_proveedor');
+    const desc     = (form.get('descripcion') as string)?.trim();
+    const base     = Number(form.get('precio_base') ?? 0) || 0;
+    const cantidad = Math.max(1, Number(form.get('cantidad') ?? 1) || 1);
+    const horas    = Math.max(1, Number(form.get('horas') ?? 1) || 1);
+    const subtotal = base * cantidad * horas;
+    const rol      = (form.get('rol') as string)?.trim() || null;
+    const prov     = (form.get('proveedor_nombre') as string)?.trim() || null;
+    const pagoRaw  = form.get('pago_proveedor');
     const pagoProv = pagoRaw === null || pagoRaw === '' ? null : Number(pagoRaw) || 0;
     if (!desc) {
       error = 'La descripción es obligatoria.';
@@ -130,8 +114,8 @@ if (Astro.request.method === 'POST' && editable) {
         .bind(id).first<any>();
       const orden = (maxOrden?.m ?? 0) + 1;
       await db
-        .prepare('INSERT INTO lineas_cotizacion (id, cotizacion_id, descripcion, cantidad, precio_unitario, rol, proveedor_nombre, pago_proveedor, orden) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)')
-        .bind(newId(), id, desc, cobro, rol, prov, pagoProv, orden)
+        .prepare('INSERT INTO lineas_cotizacion (id, cotizacion_id, descripcion, cantidad, precio_unitario, precio_base, horas, rol, proveedor_nombre, pago_proveedor, orden) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(newId(), id, desc, cantidad, subtotal, base, horas, rol, prov, pagoProv, orden)
         .run();
       await db.prepare('UPDATE cotizaciones SET updated_at = ? WHERE id = ?').bind(now(), id).run();
       return Astro.redirect(`/cotizaciones/${id}`);
@@ -140,17 +124,20 @@ if (Astro.request.method === 'POST' && editable) {
 
   // ── Editar línea ───────────────────────────────────────────────────────────
   if (action === 'edit_linea') {
-    const lineaId = form.get('linea_id') as string;
-    const desc    = (form.get('descripcion') as string)?.trim();
-    const cobro   = Number(form.get('cobro_cliente') ?? 0) || 0;
-    const rol     = (form.get('rol') as string)?.trim() || null;
-    const prov    = (form.get('proveedor_nombre') as string)?.trim() || null;
-    const pagoRaw = form.get('pago_proveedor');
+    const lineaId  = form.get('linea_id') as string;
+    const desc     = (form.get('descripcion') as string)?.trim();
+    const base     = Number(form.get('precio_base') ?? 0) || 0;
+    const cantidad = Math.max(1, Number(form.get('cantidad') ?? 1) || 1);
+    const horas    = Math.max(1, Number(form.get('horas') ?? 1) || 1);
+    const subtotal = base * cantidad * horas;
+    const rol      = (form.get('rol') as string)?.trim() || null;
+    const prov     = (form.get('proveedor_nombre') as string)?.trim() || null;
+    const pagoRaw  = form.get('pago_proveedor');
     const pagoProv = pagoRaw === null || pagoRaw === '' ? null : Number(pagoRaw) || 0;
     if (desc) {
       await db
-        .prepare('UPDATE lineas_cotizacion SET descripcion = ?, precio_unitario = ?, rol = ?, proveedor_nombre = ?, pago_proveedor = ? WHERE id = ? AND cotizacion_id = ?')
-        .bind(desc, cobro, rol, prov, pagoProv, lineaId, id).run();
+        .prepare('UPDATE lineas_cotizacion SET descripcion = ?, cantidad = ?, horas = ?, precio_base = ?, precio_unitario = ?, rol = ?, proveedor_nombre = ?, pago_proveedor = ? WHERE id = ? AND cotizacion_id = ?')
+        .bind(desc, cantidad, horas, base, subtotal, rol, prov, pagoProv, lineaId, id).run();
       await db.prepare('UPDATE cotizaciones SET updated_at = ? WHERE id = ?').bind(now(), id).run();
     }
     return Astro.redirect(`/cotizaciones/${id}`);
@@ -245,17 +232,24 @@ const cot = await db
 if (!cot) return Astro.redirect('/cotizaciones');
 
 const { results: lineasRaw } = await db
-  .prepare('SELECT * FROM lineas_cotizacion WHERE cotizacion_id = ? ORDER BY orden')
+  .prepare(`SELECT l.*, cs.max_descuento AS _max_desc, cs.descripcion AS _concepto_desc
+            FROM lineas_cotizacion l
+            LEFT JOIN conceptos_servicio cs ON cs.id = l.concepto_id
+            WHERE l.cotizacion_id = ? ORDER BY l.orden`)
   .bind(id).all<any>();
 
-// Enriquecer cada línea con su pago a proveedor real y reparto parseado.
+// Enriquecer cada línea: cantidad / precio unitario / horas / subtotal + margen interno.
 const lineas = (lineasRaw ?? []).map((l: any) => {
   let repartos: any[] = [];
   try { repartos = JSON.parse(l.reparto_json ?? '[]').filter((r: any) => r.proveedor_nombre); } catch {}
-  const cobro = l.precio_unitario ?? 0;
-  // Pago a proveedores: si la línea tiene pago_proveedor definido (concepto o manual), úsalo; si no, 80/20.
-  const pago = l.pago_proveedor != null ? l.pago_proveedor : Math.round(cobro * 0.8);
-  return { ...l, repartos, _cobro: cobro, _pago: pago, _util: cobro - pago };
+  const cant  = l.cantidad ?? 1;
+  const horas = l.horas ?? 1;
+  const sub   = l.precio_unitario ?? 0;               // subtotal de la línea
+  const base  = l.precio_base != null ? l.precio_base // precio unitario base
+                : (cant * horas > 0 ? sub / (cant * horas) : sub);
+  // Pago a proveedores: si la línea tiene pago_proveedor definido, úsalo; si no, 80/20.
+  const pago = l.pago_proveedor != null ? l.pago_proveedor : Math.round(sub * 0.8);
+  return { ...l, repartos, _cant: cant, _horas: horas, _base: base, _cobro: sub, _pago: pago, _util: sub - pago };
 });
 
 const { results: clientes } = await db.prepare('SELECT id, nombre FROM clientes ORDER BY nombre').all<any>();
@@ -289,6 +283,18 @@ const totalCobrado     = lineas.reduce((s: number, l: any) => s + l._cobro, 0);
 const totalProveedores = lineas.reduce((s: number, l: any) => s + l._pago, 0);
 const totalUtilidad    = totalCobrado - totalProveedores;
 const margenPct        = totalCobrado > 0 ? Math.round((totalUtilidad / totalCobrado) * 100) : 0;
+
+// Bloque de totales estilo hoja: Subtotal → Descuento (con tope) → IVA → Total.
+const subtotalSinIva = totalCobrado;
+const topesDesc      = lineas.map((l: any) => l._max_desc).filter((v: any) => v != null && v > 0);
+const topeDescuento  = topesDesc.length ? Math.min(...topesDesc) : 100;
+const descuentoPctReq = cot.descuento_pct ?? 0;
+const descuentoPct    = Math.min(descuentoPctReq, topeDescuento);
+const descuentoMonto  = subtotalSinIva * descuentoPct / 100;
+const subtotalConDesc = subtotalSinIva - descuentoMonto;
+const ivaPct          = cot.iva_pct ?? 16;
+const ivaMonto        = subtotalConDesc * ivaPct / 100;
+const totalConIva     = subtotalConDesc + ivaMonto;
 
 const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
 
@@ -381,11 +387,11 @@ const ESTADOS_FLUJO = [
         <table>
           <thead>
             <tr>
-              <th>Rol</th>
-              <th>Concepto / Proveedores</th>
-              <th class="right">Cobro cliente</th>
-              <th class="right">Pago proveedores</th>
-              <th class="right">Utilidad FC</th>
+              <th>Concepto</th>
+              <th class="right">Cant.</th>
+              <th class="right">Precio unit.</th>
+              <th class="right">Horas</th>
+              <th class="right">Subtotal</th>
               <th></th>
             </tr>
           </thead>
@@ -395,17 +401,16 @@ const ESTADOS_FLUJO = [
                 <tr>
                   <td colspan="6" style="padding:0">
                     <form method="POST" action={`/cotizaciones/${id}`}
-                          style="display:grid;grid-template-columns:130px 1fr 110px 110px auto auto;gap:6px;padding:8px;background:var(--bg-2)">
+                          style="display:grid;grid-template-columns:1fr 70px 110px 70px 110px auto auto;gap:6px;padding:8px;background:var(--bg-2);align-items:center">
                       <input type="hidden" name="_action" value="edit_linea" />
                       <input type="hidden" name="linea_id" value={l.id} />
-                      <select class="select" name="rol" style="font-size:12px">
-                        <option value="">— rol —</option>
-                        {ROLES.map((r) => <option value={r} selected={l.rol === r}>{r}</option>)}
-                      </select>
-                      <input class="input" name="descripcion" value={l.descripcion} required placeholder="Descripción" />
-                      <input class="input" type="number" name="cobro_cliente" value={l.precio_unitario ?? 0} min="0" step="1" placeholder="Cobro" title="Cobro al cliente" />
-                      <input class="input" type="number" name="pago_proveedor" value={l.pago_proveedor ?? ''} min="0" step="1" placeholder="Pago prov." title="Pago a proveedores (vacío = 80%)" />
+                      <input type="hidden" name="rol" value={l.rol ?? ''} />
                       <input type="hidden" name="proveedor_nombre" value={l.proveedor_nombre ?? ''} />
+                      <input class="input" name="descripcion" value={l.descripcion} required placeholder="Concepto" />
+                      <input class="input" type="number" name="cantidad" value={l._cant} min="1" step="1" title="Cantidad" />
+                      <input class="input" type="number" name="precio_base" value={Math.round(l._base)} min="0" step="1" title="Precio unitario" />
+                      <input class="input" type="number" name="horas" value={l._horas} min="1" step="0.5" title="Horas" />
+                      <input class="input" type="number" name="pago_proveedor" value={l.pago_proveedor ?? ''} min="0" step="1" placeholder="Pago prov." title="Pago a proveedores (vacío = 80%)" />
                       <button type="submit" class="btn btn-sm btn-primary">✓</button>
                       <a href={`/cotizaciones/${id}`} class="btn btn-sm">✕</a>
                     </form>
@@ -413,25 +418,22 @@ const ESTADOS_FLUJO = [
                 </tr>
               ) : (
                 <tr>
-                  <td><span class="chip" style="font-size:10px">{l.rol ?? '—'}</span></td>
                   <td>
                     <div style="font-weight:500">
                       {l.descripcion}
                       {l.concepto_id && <span class="chip" style="font-size:9px;margin-left:6px;color:var(--gold)">catálogo</span>}
                     </div>
-                    {l.repartos.length > 0 ? (
-                      <div class="text-muted" style="font-size:11px;margin-top:3px">
-                        {(l.repartos as any[]).map((r) => (
-                          <div>· {r.proveedor_nombre}{r.rol ? ` (${r.rol})` : ''} — {fmt(r.monto_mxn ?? 0)}</div>
-                        ))}
+                    {l._concepto_desc && <div class="text-muted" style="font-size:11px;margin-top:2px;white-space:pre-wrap">{l._concepto_desc}</div>}
+                    {editable && (
+                      <div class="text-muted" style="font-size:10px;margin-top:3px">
+                        interno: paga {fmt(l._pago)} · utilidad {fmt(l._util)}
                       </div>
-                    ) : (
-                      l.proveedor_nombre && <div class="text-muted" style="font-size:11px">{l.proveedor_nombre}</div>
                     )}
                   </td>
-                  <td class="right mono" style="color:var(--gold)">{fmt(l._cobro)}</td>
-                  <td class="right mono" style="color:var(--danger,#e25555)">{fmt(l._pago)}</td>
-                  <td class="right mono text-ok">{fmt(l._util)}</td>
+                  <td class="right mono">{l._cant}</td>
+                  <td class="right mono">{fmt(l._base)}</td>
+                  <td class="right mono">{l._horas}</td>
+                  <td class="right mono" style="color:var(--gold);font-weight:600">{fmt(l._cobro)}</td>
                   <td style="white-space:nowrap">
                     {editable && cot.estado !== 'convertida' && (
                       <>
@@ -450,15 +452,59 @@ const ESTADOS_FLUJO = [
           </tbody>
           <tfoot style="border-top:2px solid var(--border)">
             <tr>
-              <td colspan="2" style="font-weight:600;text-align:right">Total</td>
-              <td class="right mono" style="color:var(--gold);font-size:15px">{fmt(totalCobrado)}</td>
-              <td class="right mono" style="color:var(--danger,#e25555);font-size:15px">{fmt(totalProveedores)}</td>
-              <td class="right mono text-ok" style="font-size:15px">{fmt(totalUtilidad)}</td>
+              <td colspan="4" style="text-align:right;color:var(--text-muted,#888)">Subtotal sin IVA</td>
+              <td class="right mono" style="font-size:14px">{fmt(subtotalSinIva)}</td>
+              <td></td>
+            </tr>
+            {descuentoPct > 0 && (
+              <tr>
+                <td colspan="4" style="text-align:right;color:var(--text-muted,#888)">Descuento ({descuentoPct}%)</td>
+                <td class="right mono" style="color:var(--danger,#e25555)">−{fmt(descuentoMonto)}</td>
+                <td></td>
+              </tr>
+            )}
+            {descuentoPct > 0 && (
+              <tr>
+                <td colspan="4" style="text-align:right;color:var(--text-muted,#888)">Subtotal con descuento</td>
+                <td class="right mono">{fmt(subtotalConDesc)}</td>
+                <td></td>
+              </tr>
+            )}
+            <tr>
+              <td colspan="4" style="text-align:right;color:var(--text-muted,#888)">+ IVA {ivaPct}%</td>
+              <td class="right mono">{fmt(ivaMonto)}</td>
+              <td></td>
+            </tr>
+            <tr>
+              <td colspan="4" style="text-align:right;font-weight:700;font-size:15px">TOTAL CON IVA</td>
+              <td class="right mono" style="color:var(--gold);font-size:16px;font-weight:700">{fmt(totalConIva)}</td>
               <td></td>
             </tr>
           </tfoot>
         </table>
       </div>
+    )}
+
+    {/* ── Descuento / IVA ── */}
+    {editable && cot.estado !== 'convertida' && lineas.length > 0 && (
+      <form method="POST" action={`/cotizaciones/${id}`}
+            style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;background:var(--bg-2);border:1px solid var(--border);padding:12px;margin-bottom:12px">
+        <input type="hidden" name="_action" value="set_descuento" />
+        <div>
+          <label class="label">Descuento %</label>
+          <input class="input" type="number" name="descuento_pct" value={cot.descuento_pct ?? 0} min="0" max="100" step="1" style="width:90px" />
+        </div>
+        <div>
+          <label class="label">IVA %</label>
+          <input class="input" type="number" name="iva_pct" value={cot.iva_pct ?? 16} min="0" max="100" step="1" style="width:90px" />
+        </div>
+        <button type="submit" class="btn btn-sm btn-primary">Aplicar</button>
+        {topeDescuento < 100 && (
+          <span class="text-muted" style="font-size:11px;padding-bottom:8px">
+            Tope de descuento según conceptos: {topeDescuento}%{descuentoPctReq > topeDescuento ? ` (se aplicó ${descuentoPct}%)` : ''}
+          </span>
+        )}
+      </form>
     )}
 
     {!lineas.length && <p class="text-muted">Sin líneas aún. Agrega conceptos del catálogo abajo.</p>}
@@ -483,25 +529,18 @@ const ESTADOS_FLUJO = [
               ))}
             </select>
           </div>
-          <div id="col_modelo_nombre" style="display:none;min-width:160px">
-            <label class="label">Modelo (opcional)</label>
-            <input class="input" type="text" name="modelo_nombre" id="inp_modelo_nombre" placeholder="Ej. Ana López" />
+          <div style="min-width:90px">
+            <label class="label">Cantidad</label>
+            <input class="input" type="number" name="cantidad" id="inp_cantidad_cat" min="1" step="1" value="1" onchange="onProvChange()" oninput="onProvChange()" style="width:90px" />
           </div>
-          <div id="col_unidades" style="display:none;min-width:100px">
-            <label class="label">Nº modelos</label>
-            <input class="input" type="number" name="unidades" id="inp_unidades_cat" min="1" step="1" value="1" onchange="onProvChange()" oninput="onProvChange()" style="width:100px" />
-          </div>
-          <div id="col_horas" style="display:none;min-width:90px">
-            <label class="label">Horas c/u</label>
+          <div style="min-width:90px">
+            <label class="label">Horas</label>
             <input class="input" type="number" name="horas" id="inp_horas_cat" min="1" step="0.5" value="1" onchange="onProvChange()" oninput="onProvChange()" style="width:90px" />
           </div>
           <button type="submit" class="btn btn-primary">Agregar a la cotización</button>
         </form>
-        <p id="hint_modelo" class="text-muted" style="display:none;font-size:11px;margin:8px 0 0">
-          Tarifa por hora de modelo y por unidad. Ej: 5 modelos × 4 hrs = 5 primeras horas + 15 horas extra. El pago a cada modelo lo defines en la línea (cambia por producción).
-        </p>
 
-        {/* Preview del reparto del concepto seleccionado */}
+        {/* Preview del subtotal y reparto del concepto seleccionado */}
         <div id="preview_concepto" style="display:none;margin-top:12px;padding:10px;background:var(--bg-3,#1a1a1a);border:1px solid var(--border);border-radius:4px">
           <div class="card-meta" style="margin-bottom:6px">Desglose del concepto</div>
           <div id="preview_repartos" style="font-size:12px"></div>
@@ -539,31 +578,27 @@ const ESTADOS_FLUJO = [
           </div>
           <div class="row">
             <div class="col">
-              <label class="label">Cobro al cliente MXN</label>
-              <input class="input" type="number" name="cobro_cliente" id="inp_cobro" placeholder="0" min="0" step="1" oninput="calcUtilManual()" />
+              <label class="label">Precio unitario MXN</label>
+              <input class="input" type="number" name="precio_base" id="inp_base" placeholder="0" min="0" step="1" oninput="calcUtilManual()" />
             </div>
+            <div class="col">
+              <label class="label">Cantidad</label>
+              <input class="input" type="number" name="cantidad" id="inp_cant" value="1" min="1" step="1" oninput="calcUtilManual()" />
+            </div>
+            <div class="col">
+              <label class="label">Horas</label>
+              <input class="input" type="number" name="horas" id="inp_horas" value="1" min="1" step="0.5" oninput="calcUtilManual()" />
+            </div>
+          </div>
+          <div class="row">
             <div class="col">
               <label class="label">Pago al proveedor MXN <span class="text-muted" style="font-weight:400">(vacío = 80%)</span></label>
               <input class="input" type="number" name="pago_proveedor" id="inp_pago" placeholder="auto 80%" min="0" step="1" oninput="calcUtilManual()" />
             </div>
             <div class="col" style="display:flex;align-items:flex-end">
-              <div id="util_manual" style="font-size:12px;color:var(--text-ok,#4ade80);font-weight:600;padding-bottom:10px"></div>
+              <div id="util_manual" style="font-size:12px;color:var(--text-muted,#888);font-weight:600;padding-bottom:10px"></div>
             </div>
-          </div>
-          {/* Helper de horas para modelos */}
-          <div id="helper_modelo" style="display:none;background:var(--bg-3,#1a1a1a);border:1px solid var(--border);padding:10px;margin-top:8px;border-radius:4px">
-            <label class="label" style="margin-bottom:6px">Calcular tarifa de modelo</label>
-            <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-              <div>
-                <label class="label" style="font-size:10px">Horas</label>
-                <input class="input" type="number" id="inp_horas_modelo" min="1" step="0.5" placeholder="Ej. 3"
-                       style="width:80px" oninput="calcTarifaModelo()" />
-              </div>
-              <div style="font-size:12px;color:var(--text-muted,#888);padding-bottom:8px">
-                1ª hora $1,000 &middot; horas extra $800/hr
-              </div>
-              <div id="modelo_result" style="font-size:13px;color:var(--gold);font-weight:600;padding-bottom:8px"></div>
-            </div>
+            <div class="col"></div>
           </div>
           <button type="submit" class="btn btn-primary" style="margin-top:8px">Agregar</button>
         </form>
@@ -619,103 +654,69 @@ const CATALOGO = proveedoresData;
 
 const fmtMX = (n) => `$${Math.round(n || 0).toLocaleString('es-MX')}`;
 
-// Preview del reparto al elegir un concepto del catálogo
+// Preview del subtotal + reparto al elegir un concepto del catálogo
 function onProvChange() {
   const sel = document.getElementById('sel_prov_cat');
   if (!sel) return;
   const concepto = CATALOGO.find((c) => c.id === sel.value);
   const box = document.getElementById('preview_concepto');
   const cont = document.getElementById('preview_repartos');
-  const colHoras = document.getElementById('col_horas');
-  const colModelo = document.getElementById('col_modelo_nombre');
-  const colUnidades = document.getElementById('col_unidades');
-  const hintModelo = document.getElementById('hint_modelo');
   if (!concepto || !box || !cont) {
     if (box) box.style.display = 'none';
-    if (colHoras) colHoras.style.display = 'none';
-    if (colModelo) colModelo.style.display = 'none';
-    if (colUnidades) colUnidades.style.display = 'none';
-    if (hintModelo) hintModelo.style.display = 'none';
     return;
   }
 
-  // ¿Concepto por horas (modelo)? Mostrar campos de nº modelos + horas + nombre.
-  const horaAd = concepto.precio_hora_adicional;
-  const porHora = horaAd != null && horaAd > 0;
-  if (colHoras) colHoras.style.display = porHora ? 'block' : 'none';
-  if (colModelo) colModelo.style.display = porHora ? 'block' : 'none';
-  if (colUnidades) colUnidades.style.display = porHora ? 'block' : 'none';
-  if (hintModelo) hintModelo.style.display = porHora ? 'block' : 'none';
+  let cantidad = parseFloat(document.getElementById('inp_cantidad_cat')?.value || '1') || 1;
+  if (cantidad < 1) cantidad = 1;
+  let horas = parseFloat(document.getElementById('inp_horas_cat')?.value || '1') || 1;
+  if (horas < 1) horas = 1;
 
   const precioBase = concepto.precio_mxn || 0;
+  const horaAd = concepto.precio_hora_adicional;
+  const porHora = horaAd != null && horaAd > 0;
 
-  if (porHora) {
-    let horas = parseFloat(document.getElementById('inp_horas_cat')?.value || '1') || 1;
-    if (horas < 1) horas = 1;
-    let unidades = parseFloat(document.getElementById('inp_unidades_cat')?.value || '1') || 1;
-    if (unidades < 1) unidades = 1;
-    const porModelo = horas > 1 ? precioBase + (horas - 1) * horaAd : precioBase;
-    const cobro = unidades * porModelo;
-    const hPrimeras = unidades * 1;
-    const hExtra = unidades * Math.max(0, horas - 1);
-    const nMod = unidades % 1 === 0 ? unidades : unidades.toFixed(1);
-    let html = horas > 1
-      ? `<div style="color:#888;font-size:11px;margin-bottom:6px">${nMod} modelo(s) × ${horas} hrs = ${hPrimeras} h a ${fmtMX(precioBase)} + ${hExtra} h a ${fmtMX(horaAd)}</div>`
-      : `<div style="color:#888;font-size:11px;margin-bottom:6px">${nMod} modelo(s) × 1 hora a ${fmtMX(precioBase)}</div>`;
-    html += `<div style="display:flex;justify-content:space-between;padding:2px 0">
-        <span style="color:#888">Por modelo</span>
-        <span class="mono" style="color:#888">${fmtMX(porModelo)}</span></div>`;
-    html += `<div style="display:flex;justify-content:space-between;padding:2px 0;font-weight:600">
-        <span>Cobro total al cliente</span>
-        <span class="mono" style="color:var(--gold)">${fmtMX(cobro)}</span></div>`;
-    html += `<div style="color:#888;font-size:11px;margin-top:4px">El pago a los modelos lo defines en la línea (Editar).</div>`;
-    cont.innerHTML = html;
-    box.style.display = 'block';
-    return;
+  // Subtotal: tiered (1ª hora + extras) × cantidad, o precio × cantidad × horas.
+  const subtotal = porHora
+    ? cantidad * (horas > 1 ? precioBase + (horas - 1) * horaAd : precioBase)
+    : precioBase * cantidad * horas;
+
+  let html = '';
+  if (porHora && horas > 1) {
+    html += `<div style="color:#888;font-size:11px;margin-bottom:6px">${cantidad} × (1ª hora ${fmtMX(precioBase)} + ${horas - 1} h extra a ${fmtMX(horaAd)})</div>`;
+  } else {
+    html += `<div style="color:#888;font-size:11px;margin-bottom:6px">${cantidad} × ${fmtMX(precioBase)}${horas > 1 ? ` × ${horas} h` : ''}</div>`;
   }
 
-  // Concepto normal con reparto fijo a proveedores
+  // Reparto a proveedores (si lo tiene), escalado al subtotal.
   const repartos = concepto.repartos ?? [];
-  let sumRep = 0;
-  let html = '';
+  const sumRep = repartos.reduce((s, r) => s + (r.monto_mxn || 0), 0);
+  const factor = precioBase > 0 ? subtotal / precioBase : cantidad * horas;
   for (const r of repartos) {
-    sumRep += (r.monto_mxn || 0);
     html += `<div style="display:flex;justify-content:space-between;padding:2px 0">
       <span>· ${r.proveedor_nombre}${r.rol ? ` <span style="color:#888">(${r.rol})</span>` : ''}</span>
-      <span class="mono" style="color:var(--danger,#e25555)">${fmtMX(r.monto_mxn)}</span></div>`;
+      <span class="mono" style="color:var(--danger,#e25555)">${fmtMX((r.monto_mxn || 0) * factor)}</span></div>`;
   }
-  html += `<div style="display:flex;justify-content:space-between;padding:6px 0 2px;margin-top:4px;border-top:1px solid var(--border)">
-      <span style="color:var(--gold)">Utilidad FC Agency</span>
-      <span class="mono" style="color:var(--text-ok,#4ade80)">${fmtMX(precioBase - sumRep)}</span></div>`;
+  if (repartos.length > 0) {
+    html += `<div style="display:flex;justify-content:space-between;padding:6px 0 2px;margin-top:4px;border-top:1px solid var(--border)">
+        <span style="color:var(--gold)">Utilidad FC Agency</span>
+        <span class="mono" style="color:var(--text-ok,#4ade80)">${fmtMX(subtotal - sumRep * factor)}</span></div>`;
+  }
   html += `<div style="display:flex;justify-content:space-between;padding:2px 0;font-weight:600">
-      <span>Cobro al cliente</span>
-      <span class="mono" style="color:var(--gold)">${fmtMX(precioBase)}</span></div>`;
+      <span>Subtotal de la línea</span>
+      <span class="mono" style="color:var(--gold)">${fmtMX(subtotal)}</span></div>`;
   cont.innerHTML = html;
   box.style.display = 'block';
 }
 
 // Utilidad en vivo en el form manual
 function calcUtilManual() {
-  const cobro = parseFloat(document.getElementById('inp_cobro')?.value || '0') || 0;
+  const base = parseFloat(document.getElementById('inp_base')?.value || '0') || 0;
+  const cant = parseFloat(document.getElementById('inp_cant')?.value || '1') || 1;
+  const horas = parseFloat(document.getElementById('inp_horas')?.value || '1') || 1;
+  const subtotal = base * cant * horas;
   const pagoRaw = document.getElementById('inp_pago')?.value;
-  const pago = pagoRaw === '' || pagoRaw == null ? Math.round(cobro * 0.8) : (parseFloat(pagoRaw) || 0);
+  const pago = pagoRaw === '' || pagoRaw == null ? Math.round(subtotal * 0.8) : (parseFloat(pagoRaw) || 0);
   const out = document.getElementById('util_manual');
-  if (out) out.textContent = cobro > 0 ? `Utilidad FC: ${fmtMX(cobro - pago)}` : '';
+  if (out) out.textContent = subtotal > 0 ? `Subtotal ${fmtMX(subtotal)} · Utilidad FC ${fmtMX(subtotal - pago)}` : '';
 }
-
-// Helper tarifa modelo
-function calcTarifaModelo() {
-  const hrs   = parseFloat(document.getElementById('inp_horas_modelo')?.value || '0') || 0;
-  const cobro = hrs <= 0 ? 0 : Math.round(1000 + Math.max(0, hrs - 1) * 800);
-  const res   = document.getElementById('modelo_result');
-  const inp   = document.getElementById('inp_cobro');
-  if (res) res.textContent = hrs > 0 ? `= $${cobro.toLocaleString('es-MX')} MXN` : '';
-  if (inp && hrs > 0) { inp.value = String(cobro); calcUtilManual(); }
-}
-
-// Mostrar/ocultar helper cuando rol=Modelo
-document.getElementById('inp_rol')?.addEventListener('change', function () {
-  const helper = document.getElementById('helper_modelo');
-  if (helper) helper.style.display = this.value === 'Modelo' ? 'block' : 'none';
-});
 </script>
