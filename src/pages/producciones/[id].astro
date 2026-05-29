@@ -1,11 +1,13 @@
 ---
 import Layout from '../../components/Layout.astro';
 import ProduccionForm from '../../components/producciones/ProduccionForm.astro';
-import { requireUser } from '../../lib/session';
+import NotasTimeline from '../../components/NotasTimeline.astro';
+import { requireUser, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 
-requireUser(Astro);
+const user = requireUser(Astro);
+const editable = canEdit(user);
 const db = getDB(Astro);
 const { id } = Astro.params;
 
@@ -25,10 +27,36 @@ interface Linea {
   notas: string | null;
 }
 
-if (Astro.request.method === 'POST') {
+if (Astro.request.method === 'POST' && editable) {
   const form = await Astro.request.formData();
   const method = form.get('_method');
   const action = form.get('_action');
+
+  if (action === 'add_nota') {
+    const texto = (form.get('nota_texto') as string)?.trim();
+    if (texto) {
+      await db
+        .prepare(
+          `INSERT INTO notas (id, entidad_tipo, entidad_id, texto, autor_user_id, autor_nombre, created_at)
+           VALUES (?, 'produccion', ?, ?, ?, ?, ?)`
+        )
+        .bind(newId(), id, texto, user.id, user.nombre, now())
+        .run();
+    }
+    return Astro.redirect(`/producciones/${id}`);
+  }
+
+  if (action === 'delete_nota') {
+    const notaId = form.get('nota_id') as string;
+    if (notaId) {
+      const cond = user.rol === 'admin' ? '' : 'AND autor_user_id = ?';
+      const stmt = user.rol === 'admin'
+        ? db.prepare(`DELETE FROM notas WHERE id = ? AND entidad_tipo = 'produccion' AND entidad_id = ?`).bind(notaId, id)
+        : db.prepare(`DELETE FROM notas WHERE id = ? AND entidad_tipo = 'produccion' AND entidad_id = ? AND autor_user_id = ?`).bind(notaId, id, user.id);
+      await stmt.run();
+    }
+    return Astro.redirect(`/producciones/${id}`);
+  }
 
   if (method === 'DELETE') {
     await db.prepare('DELETE FROM producciones WHERE id = ?').bind(id).run();
@@ -148,10 +176,12 @@ const ROLES = [
     <h1>{prod.titulo}</h1>
     <div style="display:flex;gap:10px">
       <a href="/producciones" class="btn btn-sm">Volver</a>
-      <form method="POST" action={`/producciones/${id}`} onsubmit="return confirm('¿Eliminar esta producción y todas sus líneas?')" style="display:inline">
-        <input type="hidden" name="_method" value="DELETE" />
-        <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
-      </form>
+      {editable && (
+        <form method="POST" action={`/producciones/${id}`} onsubmit="return confirm('¿Eliminar esta producción y todas sus líneas?')" style="display:inline">
+          <input type="hidden" name="_method" value="DELETE" />
+          <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
+        </form>
+      )}
     </div>
   </div>
 
@@ -256,12 +286,18 @@ const ROLES = [
   </details>
 
   <h2 style="margin-top:32px">Detalles de la producción</h2>
-  <ProduccionForm
-    produccion={prod}
-    marcas={marcas}
-    clientes={clientes}
-    action={`/producciones/${id}`}
-    submitLabel="Guardar cambios"
-    isEdit={true}
-  />
+  {editable ? (
+    <ProduccionForm
+      produccion={prod}
+      marcas={marcas}
+      clientes={clientes}
+      action={`/producciones/${id}`}
+      submitLabel="Guardar cambios"
+      isEdit={true}
+    />
+  ) : (
+    <p class="text-muted" style="font-size:12px">Solo lectura.</p>
+  )}
+
+  <NotasTimeline entidadTipo="produccion" entidadId={id} />
 </Layout>

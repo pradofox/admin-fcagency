@@ -1,18 +1,46 @@
 ---
 import Layout from '../../components/Layout.astro';
-import { requireUser } from '../../lib/session';
+import NotasTimeline from '../../components/NotasTimeline.astro';
+import { requireUser, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
 
-requireUser(Astro);
+const user = requireUser(Astro);
+const editable = canEdit(user);
 const db = getDB(Astro);
 const { id } = Astro.params;
 
 let saved = false;
 
-if (Astro.request.method === 'POST') {
+if (Astro.request.method === 'POST' && editable) {
   const form = await Astro.request.formData();
   const method = form.get('_method');
   const action = form.get('_action');
+
+  if (action === 'add_nota') {
+    const texto = (form.get('nota_texto') as string)?.trim();
+    if (texto) {
+      await db
+        .prepare(
+          `INSERT INTO notas (id, entidad_tipo, entidad_id, texto, autor_user_id, autor_nombre, created_at)
+           VALUES (?, 'contacto', ?, ?, ?, ?, ?)`
+        )
+        .bind(newId(), id, texto, user.id, user.nombre, now())
+        .run();
+    }
+    return Astro.redirect(`/contactos/${id}`);
+  }
+
+  if (action === 'delete_nota') {
+    const notaId = form.get('nota_id') as string;
+    if (notaId) {
+      const stmt = user.rol === 'admin'
+        ? db.prepare(`DELETE FROM notas WHERE id = ? AND entidad_tipo = 'contacto' AND entidad_id = ?`).bind(notaId, id)
+        : db.prepare(`DELETE FROM notas WHERE id = ? AND entidad_tipo = 'contacto' AND entidad_id = ? AND autor_user_id = ?`).bind(notaId, id, user.id);
+      await stmt.run();
+    }
+    return Astro.redirect(`/contactos/${id}`);
+  }
 
   if (method === 'DELETE') {
     await db.prepare('DELETE FROM contactos WHERE id = ?').bind(id).run();
@@ -239,8 +267,12 @@ const progresoPct = pasosTotal ? Math.round((pasosCompletados / pasosTotal) * 10
     <label class="label">Notas</label>
     <textarea class="textarea" name="notas">{contacto.notas ?? ''}</textarea>
 
-    <div class="form-actions">
-      <button type="submit" class="btn btn-primary">Guardar cambios</button>
-    </div>
+    {editable && (
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Guardar cambios</button>
+      </div>
+    )}
   </form>
+
+  <NotasTimeline entidadTipo="contacto" entidadId={id} />
 </Layout>

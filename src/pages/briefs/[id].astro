@@ -1,19 +1,48 @@
 ---
 import Layout from '../../components/Layout.astro';
 import BriefForm from '../../components/briefs/BriefForm.astro';
-import { requireUser } from '../../lib/session';
+import NotasTimeline from '../../components/NotasTimeline.astro';
+import { requireUser, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
 
-requireUser(Astro);
+const user = requireUser(Astro);
+const editable = canEdit(user);
 const db = getDB(Astro);
 const { id } = Astro.params;
 
 let error: string | null = null;
 let saved = false;
 
-if (Astro.request.method === 'POST') {
+if (Astro.request.method === 'POST' && editable) {
   const form = await Astro.request.formData();
   const method = form.get('_method');
+  const action = form.get('_action');
+
+  if (action === 'add_nota') {
+    const texto = (form.get('nota_texto') as string)?.trim();
+    if (texto) {
+      await db
+        .prepare(
+          `INSERT INTO notas (id, entidad_tipo, entidad_id, texto, autor_user_id, autor_nombre, created_at)
+           VALUES (?, 'brief', ?, ?, ?, ?, ?)`
+        )
+        .bind(newId(), id, texto, user.id, user.nombre, now())
+        .run();
+    }
+    return Astro.redirect(`/briefs/${id}`);
+  }
+
+  if (action === 'delete_nota') {
+    const notaId = form.get('nota_id') as string;
+    if (notaId) {
+      const stmt = user.rol === 'admin'
+        ? db.prepare(`DELETE FROM notas WHERE id = ? AND entidad_tipo = 'brief' AND entidad_id = ?`).bind(notaId, id)
+        : db.prepare(`DELETE FROM notas WHERE id = ? AND entidad_tipo = 'brief' AND entidad_id = ? AND autor_user_id = ?`).bind(notaId, id, user.id);
+      await stmt.run();
+    }
+    return Astro.redirect(`/briefs/${id}`);
+  }
 
   if (method === 'DELETE') {
     await db.prepare('DELETE FROM briefs WHERE id = ?').bind(id).run();
@@ -66,10 +95,12 @@ const { results: piezas } = await db
     <h1>{brief.titulo}</h1>
     <div style="display:flex;gap:10px">
       <a href="/briefs" class="btn btn-sm">Volver</a>
-      <form method="POST" action={`/briefs/${id}`} onsubmit="return confirm('¿Eliminar brief y sus piezas?')" style="display:inline">
-        <input type="hidden" name="_method" value="DELETE" />
-        <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
-      </form>
+      {editable && (
+        <form method="POST" action={`/briefs/${id}`} onsubmit="return confirm('¿Eliminar brief y sus piezas?')" style="display:inline">
+          <input type="hidden" name="_method" value="DELETE" />
+          <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
+        </form>
+      )}
     </div>
   </div>
 
@@ -96,5 +127,11 @@ const { results: piezas } = await db
   )}
 
   <h2 style="margin-top:8px">Datos del brief</h2>
-  <BriefForm brief={brief} marcas={marcas} action={`/briefs/${id}`} submitLabel="Guardar cambios" isEdit={true} />
+  {editable ? (
+    <BriefForm brief={brief} marcas={marcas} action={`/briefs/${id}`} submitLabel="Guardar cambios" isEdit={true} />
+  ) : (
+    <p class="text-muted" style="font-size:12px">Solo lectura.</p>
+  )}
+
+  <NotasTimeline entidadTipo="brief" entidadId={id} />
 </Layout>

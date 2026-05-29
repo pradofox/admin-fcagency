@@ -1,0 +1,66 @@
+---
+import { getDB, now } from '../lib/db';
+import { getUser, canEdit } from '../lib/session';
+import { newId } from '../lib/ids';
+
+interface Props {
+  entidadTipo: 'produccion' | 'brief' | 'contacto' | 'modelo' | 'casting';
+  entidadId: string;
+}
+
+const { entidadTipo, entidadId } = Astro.props;
+const db = getDB(Astro);
+const user = getUser(Astro);
+const editable = canEdit(user);
+
+// La página padre maneja el POST si action=add_nota o delete_nota
+// Aquí solo renderiza.
+
+const { results: notas } = await db
+  .prepare(
+    `SELECT id, texto, autor_nombre, created_at, autor_user_id
+     FROM notas WHERE entidad_tipo = ? AND entidad_id = ?
+     ORDER BY created_at DESC LIMIT 50`
+  )
+  .bind(entidadTipo, entidadId)
+  .all<{ id: string; texto: string; autor_nombre: string; created_at: number; autor_user_id: string | null }>();
+
+const fmt = (ts: number) => {
+  const d = new Date(ts);
+  return d.toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
+};
+---
+
+<h2 style="margin-top:32px">Notas <small class="text-muted" style="font-size:12px;letter-spacing:0;font-family:var(--font-body);text-transform:none">{notas?.length ?? 0}</small></h2>
+
+{editable && (
+  <form method="POST" action={Astro.url.pathname} style="margin-bottom:20px">
+    <input type="hidden" name="_action" value="add_nota" />
+    <input type="hidden" name="entidad_tipo" value={entidadTipo} />
+    <textarea class="textarea" name="nota_texto" placeholder="Deja una nota..." required style="min-height:60px"></textarea>
+    <button type="submit" class="btn btn-sm btn-primary" style="margin-top:8px">Agregar nota</button>
+  </form>
+)}
+
+{notas && notas.length > 0 ? (
+  <div>
+    {notas.map((n) => (
+      <article style="border-left:2px solid var(--gold);padding:12px 16px;background:var(--bg-2);margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;gap:14px;margin-bottom:6px">
+          <strong style="font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:var(--gold)">{n.autor_nombre}</strong>
+          <small class="text-muted">{fmt(n.created_at)}</small>
+        </div>
+        <p style="margin:0;white-space:pre-wrap">{n.texto}</p>
+        {editable && user && (user.rol === 'admin' || n.autor_user_id === user.id) && (
+          <form method="POST" action={Astro.url.pathname} style="margin-top:8px">
+            <input type="hidden" name="_action" value="delete_nota" />
+            <input type="hidden" name="nota_id" value={n.id} />
+            <button type="submit" class="btn btn-sm btn-danger" style="font-size:9px;padding:3px 10px">Eliminar</button>
+          </form>
+        )}
+      </article>
+    ))}
+  </div>
+) : (
+  <p class="text-muted" style="font-size:13px">Sin notas todavía.</p>
+)}
