@@ -2,6 +2,7 @@
 import Layout from '../components/Layout.astro';
 import { requireUser } from '../lib/session';
 import { getDB } from '../lib/db';
+import { formatFecha } from '../lib/fechas';
 
 const user = requireUser(Astro);
 const db = getDB(Astro);
@@ -14,6 +15,24 @@ async function count(sql: string, ...params: any[]): Promise<number> {
 
 const todayISO = new Date().toISOString().slice(0, 10);
 const in7days = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+
+const { results: misTareas } = await db
+  .prepare(
+    `SELECT a.id, a.tarea, a.fecha, a.prioridad, a.estado, p.titulo as produccion_titulo
+     FROM acciones_calendario a
+     LEFT JOIN producciones p ON p.id = a.produccion_id
+     WHERE a.asignado_a = ? AND a.estado IN ('pendiente','en_curso')
+     ORDER BY
+       CASE WHEN a.fecha IS NULL THEN 1 ELSE 0 END,
+       a.fecha ASC,
+       CASE a.prioridad WHEN 'Alta' THEN 0 WHEN 'Media' THEN 1 ELSE 2 END
+     LIMIT 8`
+  )
+  .bind(user.id)
+  .all<any>();
+
+const misTareasVencidas = misTareas?.filter((t: any) => t.fecha && t.fecha < todayISO).length ?? 0;
+const misTareasHoy = misTareas?.filter((t: any) => t.fecha === todayISO).length ?? 0;
 
 const [
   modelosActivas,
@@ -88,6 +107,39 @@ const fmt = (n: number | null) =>
     <h1>Hola, {user.nombre.split(' ')[0]}</h1>
     <small class="text-muted">{new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}</small>
   </div>
+
+  {misTareas && misTareas.length > 0 && (
+    <section style="margin-bottom:32px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px">
+        <h2 style="margin:0">Mis tareas pendientes
+          {misTareasVencidas > 0 && <span class="chip chip-danger" style="margin-left:10px">{misTareasVencidas} vencida{misTareasVencidas > 1 ? 's' : ''}</span>}
+          {misTareasHoy > 0 && <span class="chip chip-warning" style="margin-left:6px">{misTareasHoy} hoy</span>}
+        </h2>
+        <a href="/tareas" class="text-muted" style="font-size:12px">ver todas →</a>
+      </div>
+      {misTareas.map((t: any) => {
+        const venc = t.fecha && t.fecha < todayISO;
+        const hoy = t.fecha === todayISO;
+        return (
+          <a href={`/tareas/${t.id}`} class="card" style={`display:block;color:inherit;text-decoration:none;margin-bottom:8px;${venc ? 'border-left:3px solid var(--danger,#e25555)' : hoy ? 'border-left:3px solid var(--gold)' : ''}`}>
+            <div style="display:flex;justify-content:space-between;gap:14px">
+              <div style="flex:1;min-width:0">
+                <div style="font-weight:500;font-size:14px">{t.tarea}</div>
+                <div class="card-meta" style="margin-top:4px">
+                  {t.fecha && <span class="mono" style={venc ? 'color:var(--danger,#e25555)' : hoy ? 'color:var(--gold)' : ''}>{formatFecha(t.fecha)}</span>}
+                  {t.produccion_titulo && <span class="text-muted">↳ {t.produccion_titulo}</span>}
+                </div>
+              </div>
+              <div style="display:flex;gap:6px;flex-direction:column;align-items:flex-end">
+                {t.prioridad === 'Alta' && <span class="chip chip-danger">Alta</span>}
+                {t.estado === 'en_curso' && <span class="chip chip-gold">en curso</span>}
+              </div>
+            </div>
+          </a>
+        );
+      })}
+    </section>
+  )}
 
   <h2>Resumen</h2>
   <div class="grid-dense" style="margin-bottom:28px">

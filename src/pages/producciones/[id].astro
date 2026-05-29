@@ -178,6 +178,19 @@ const { results: lineas } = await db
   .bind(id)
   .all<Linea>();
 
+const { results: tareasProd } = await db
+  .prepare(
+    `SELECT a.id, a.tarea, a.fecha, a.prioridad, a.estado, u.nombre as asignado_nombre
+     FROM acciones_calendario a
+     LEFT JOIN users u ON u.id = a.asignado_a
+     WHERE a.produccion_id = ?
+     ORDER BY
+       CASE a.estado WHEN 'pendiente' THEN 0 WHEN 'en_curso' THEN 1 ELSE 2 END,
+       a.fecha ASC`
+  )
+  .bind(id)
+  .all<any>();
+
 const totalCobro = (lineas ?? []).reduce((a, l) => a + (l.cobro_cliente || 0), 0);
 const totalPago = (lineas ?? []).reduce((a, l) => a + (l.pago_proveedor || 0), 0);
 const utilidad = totalCobro - totalPago;
@@ -370,6 +383,34 @@ const ROLES = [
       <button type="submit" class="btn btn-primary" style="margin-top:16px">Agregar</button>
     </form>
   </details>
+
+  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:32px;margin-bottom:14px">
+    <h2 style="margin:0">Tareas</h2>
+    {editable && <a href={`/tareas/nuevo?produccion_id=${id}`} class="btn btn-sm">+ Nueva tarea</a>}
+  </div>
+  {tareasProd && tareasProd.length > 0 ? (
+    <div style="margin-bottom:24px">
+      {tareasProd.map((t: any) => (
+        <a href={`/tareas/${t.id}`} class="card" style={`display:block;color:inherit;text-decoration:none;margin-bottom:6px;${t.estado === 'completada' ? 'opacity:.6' : ''}`}>
+          <div style="display:flex;justify-content:space-between;gap:14px">
+            <div style="flex:1;min-width:0">
+              <div style={`font-weight:500;${t.estado === 'completada' ? 'text-decoration:line-through' : ''}`}>{t.tarea}</div>
+              <div class="card-meta" style="margin-top:4px">
+                {t.fecha && <span class="mono">{formatFecha(t.fecha)}</span>}
+                {t.asignado_nombre && <span class="text-muted">→ {t.asignado_nombre}</span>}
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <span class={`chip ${t.estado === 'completada' ? 'chip-ok' : t.estado === 'en_curso' ? 'chip-gold' : 'chip-warning'}`}>{t.estado.replace('_', ' ')}</span>
+              {t.prioridad === 'Alta' && <span class="chip chip-danger">Alta</span>}
+            </div>
+          </div>
+        </a>
+      ))}
+    </div>
+  ) : (
+    <p class="text-muted" style="margin-bottom:24px">Sin tareas vinculadas.</p>
+  )}
 
   <h2 style="margin-top:32px">Detalles de la producción</h2>
   {editable ? (

@@ -1,0 +1,117 @@
+---
+import Layout from '../../components/Layout.astro';
+import { requireUser, canEdit } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
+
+const user = requireUser(Astro);
+const db = getDB(Astro);
+
+if (!canEdit(user)) return Astro.redirect('/tareas');
+
+let error: string | null = null;
+
+const preProdId = Astro.url.searchParams.get('produccion_id');
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const titulo = (form.get('tarea') as string)?.trim();
+  const fecha = (form.get('fecha') as string)?.trim();
+  if (!titulo) {
+    error = 'El título de la tarea es obligatorio.';
+  } else {
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+    const id = newId();
+    const ts = now();
+    await db
+      .prepare(
+        `INSERT INTO acciones_calendario (
+          id, tarea, descripcion, fecha, prioridad, estado, done,
+          asignado_a, asignado_por, produccion_id, contacto_id,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'pendiente', 0, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        id,
+        titulo,
+        get('descripcion'),
+        fecha || null,
+        get('prioridad') ?? 'Media',
+        get('asignado_a') ?? user.id,
+        user.id,
+        get('produccion_id'),
+        get('contacto_id'),
+        ts,
+        ts
+      )
+      .run();
+    const redirect = get('produccion_id') ? `/producciones/${get('produccion_id')}` : `/tareas/${id}`;
+    return Astro.redirect(redirect);
+  }
+}
+
+const { results: usuarios } = await db
+  .prepare("SELECT id, nombre, email FROM users WHERE activo = 1 ORDER BY nombre")
+  .all<{ id: string; nombre: string; email: string }>();
+
+const { results: producciones } = await db
+  .prepare("SELECT id, titulo FROM producciones WHERE estado != 'cancelada' ORDER BY fecha_inicio DESC LIMIT 100")
+  .all<{ id: string; titulo: string }>();
+---
+
+<Layout title="Nueva tarea" pageTitle="Nueva tarea">
+  <div class="page-head">
+    <h1>Nueva tarea</h1>
+    <a href="/tareas" class="btn btn-sm">Volver</a>
+  </div>
+
+  {error && <p class="text-danger" style="margin-bottom:20px">{error}</p>}
+
+  <form method="POST" action="/tareas/nuevo">
+    <label class="label">Título de la tarea *</label>
+    <input class="input" name="tarea" required autofocus />
+
+    <label class="label">Descripción</label>
+    <textarea class="textarea" name="descripcion" placeholder="Detalles, contexto, links…"></textarea>
+
+    <div class="row">
+      <div class="col">
+        <label class="label">Asignar a</label>
+        <select class="select" name="asignado_a">
+          <option value={user.id}>— para mí —</option>
+          {usuarios?.filter(u => u.id !== user.id).map((u) => (
+            <option value={u.id}>{u.nombre}</option>
+          ))}
+        </select>
+      </div>
+      <div class="col">
+        <label class="label">Fecha de entrega</label>
+        <input class="input" type="date" name="fecha" />
+      </div>
+      <div class="col">
+        <label class="label">Prioridad</label>
+        <select class="select" name="prioridad">
+          <option value="Media">Media</option>
+          <option value="Alta">Alta</option>
+          <option value="Baja">Baja</option>
+        </select>
+      </div>
+    </div>
+
+    <label class="label">Vincular a producción (opcional)</label>
+    <select class="select" name="produccion_id">
+      <option value="">— ninguna —</option>
+      {producciones?.map((p) => (
+        <option value={p.id} selected={preProdId === p.id}>{p.titulo}</option>
+      ))}
+    </select>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Crear tarea</button>
+      <a href="/tareas" class="btn">Cancelar</a>
+    </div>
+  </form>
+</Layout>

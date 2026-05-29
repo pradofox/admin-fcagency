@@ -1,0 +1,166 @@
+---
+import Layout from '../../components/Layout.astro';
+import EmptyState from '../../components/EmptyState.astro';
+import { requireUser, canEdit, isAdmin } from '../../lib/session';
+import { getDB } from '../../lib/db';
+import { formatFecha } from '../../lib/fechas';
+
+const user = requireUser(Astro);
+const db = getDB(Astro);
+
+const vista = Astro.url.searchParams.get('vista') ?? 'mias';
+const filtroEstado = Astro.url.searchParams.get('estado') ?? 'activas';
+
+const todayISO = new Date().toISOString().slice(0, 10);
+
+let where: string[] = [];
+let binds: any[] = [];
+
+if (vista === 'mias') {
+  where.push('a.asignado_a = ?');
+  binds.push(user.id);
+} else if (vista === 'asignadas') {
+  where.push('a.asignado_por = ?');
+  binds.push(user.id);
+}
+if (filtroEstado === 'activas') {
+  where.push("a.estado IN ('pendiente','en_curso')");
+} else if (filtroEstado === 'completadas') {
+  where.push("a.estado = 'completada'");
+} else if (filtroEstado === 'vencidas') {
+  where.push("a.estado IN ('pendiente','en_curso') AND a.fecha < ?");
+  binds.push(todayISO);
+}
+
+const sql = `SELECT a.id, a.tarea, a.descripcion, a.fecha, a.prioridad, a.estado, a.done,
+                    a.asignado_a, a.asignado_por, a.produccion_id, a.contacto_id,
+                    u1.nombre as asignado_a_nombre,
+                    u2.nombre as asignado_por_nombre,
+                    p.titulo as produccion_titulo
+             FROM acciones_calendario a
+             LEFT JOIN users u1 ON u1.id = a.asignado_a
+             LEFT JOIN users u2 ON u2.id = a.asignado_por
+             LEFT JOIN producciones p ON p.id = a.produccion_id
+             ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+             ORDER BY
+               CASE a.estado WHEN 'pendiente' THEN 0 WHEN 'en_curso' THEN 1 WHEN 'completada' THEN 2 ELSE 3 END,
+               CASE a.prioridad WHEN 'Alta' THEN 0 WHEN 'Media' THEN 1 ELSE 2 END,
+               a.fecha ASC
+             LIMIT 200`;
+
+const stmt = binds.length ? db.prepare(sql).bind(...binds) : db.prepare(sql);
+const { results: tareas } = await stmt.all<any>();
+
+// Agrupar por urgencia
+const hoyStr = todayISO;
+const en7 = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+
+const grupos: Record<string, any[]> = {
+  vencidas: [],
+  hoy: [],
+  semana: [],
+  despues: [],
+  sin_fecha: [],
+  completadas: []
+};
+
+for (const t of tareas ?? []) {
+  if (t.estado === 'completada') {
+    grupos.completadas.push(t);
+  } else if (!t.fecha) {
+    grupos.sin_fecha.push(t);
+  } else if (t.fecha < hoyStr) {
+    grupos.vencidas.push(t);
+  } else if (t.fecha === hoyStr) {
+    grupos.hoy.push(t);
+  } else if (t.fecha <= en7) {
+    grupos.semana.push(t);
+  } else {
+    grupos.despues.push(t);
+  }
+}
+
+const conteoMias = (await db.prepare("SELECT COUNT(*) as c FROM acciones_calendario WHERE asignado_a = ? AND estado IN ('pendiente','en_curso')").bind(user.id).first<{c:number}>())?.c ?? 0;
+
+const prioColor: Record<string, string> = {
+  Alta: 'chip-danger',
+  Media: 'chip-warning',
+  Baja: 'chip'
+};
+const estadoColor: Record<string, string> = {
+  pendiente: 'chip-warning',
+  en_curso: 'chip-gold',
+  completada: 'chip-ok',
+  cancelada: 'chip'
+};
+
+function vistaHref(v: string) {
+  const p = new URLSearchParams();
+  p.set('vista', v);
+  if (filtroEstado !== 'activas') p.set('estado', filtroEstado);
+  return `/tareas?${p.toString()}`;
+}
+function estadoHref(e: string) {
+  const p = new URLSearchParams();
+  p.set('vista', vista);
+  p.set('estado', e);
+  return `/tareas?${p.toString()}`;
+}
+---
+
+<Layout title="Tareas" pageTitle="Tareas">
+  <div class="page-head">
+    <h1>Tareas <small class="text-muted" style="font-size:13px;letter-spacing:0;font-family:var(--font-body);text-transform:none">{conteoMias} mías activas</small></h1>
+    {canEdit(user) && <a href="/tareas/nuevo" class="btn btn-primary">+ Nueva tarea</a>}
+  </div>
+
+  <div class="filters" style="margin-bottom:8px">
+    <a href={vistaHref('mias')} class={`filter-chip ${vista === 'mias' ? 'active' : ''}`}>mis tareas</a>
+    <a href={vistaHref('asignadas')} class={`filter-chip ${vista === 'asignadas' ? 'active' : ''}`}>las que asigné</a>
+    {isAdmin(user) && <a href={vistaHref('todas')} class={`filter-chip ${vista === 'todas' ? 'active' : ''}`}>todas</a>}
+  </div>
+
+  <div class="filters" style="margin-bottom:24px">
+    <a href={estadoHref('activas')} class={`filter-chip ${filtroEstado === 'activas' ? 'active' : ''}`}>activas</a>
+    <a href={estadoHref('vencidas')} class={`filter-chip ${filtroEstado === 'vencidas' ? 'active' : ''}`}>vencidas</a>
+    <a href={estadoHref('completadas')} class={`filter-chip ${filtroEstado === 'completadas' ? 'active' : ''}`}>completadas</a>
+    <a href={estadoHref('todas')} class={`filter-chip ${filtroEstado === 'todas' ? 'active' : ''}`}>todas</a>
+  </div>
+
+  {(tareas?.length ?? 0) === 0 && (
+    <EmptyState title="Sin tareas" message={vista === 'mias' ? 'Nadie te ha asignado tareas en este filtro.' : 'No hay tareas con este filtro.'} />
+  )}
+
+  {(['vencidas','hoy','semana','despues','sin_fecha','completadas'] as const).map((g) => grupos[g].length > 0 && (
+    <section style="margin-bottom:28px">
+      <h3 style={`margin-bottom:10px;color:${g === 'vencidas' ? 'var(--danger,#e25555)' : g === 'hoy' ? 'var(--gold)' : 'var(--text-2)'}`}>
+        {g === 'vencidas' && 'Vencidas'}
+        {g === 'hoy' && 'Hoy'}
+        {g === 'semana' && 'Esta semana'}
+        {g === 'despues' && 'Más adelante'}
+        {g === 'sin_fecha' && 'Sin fecha'}
+        {g === 'completadas' && 'Completadas'}
+        <small class="text-muted" style="font-size:12px;margin-left:8px;font-family:var(--font-body);letter-spacing:0;text-transform:none">{grupos[g].length}</small>
+      </h3>
+      {grupos[g].map((t: any) => (
+        <a href={`/tareas/${t.id}`} class="card" style="display:block;color:inherit;text-decoration:none;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start">
+            <div style="flex:1;min-width:0">
+              <div style={`font-weight:500;font-size:14px;${t.estado === 'completada' ? 'text-decoration:line-through;color:var(--text-2)' : ''}`}>{t.tarea}</div>
+              <div class="card-meta" style="margin-top:6px">
+                {t.fecha && <span class="mono" style={g === 'vencidas' ? 'color:var(--danger,#e25555)' : ''}>{formatFecha(t.fecha)}</span>}
+                {t.produccion_titulo && <span class="text-muted">↳ {t.produccion_titulo}</span>}
+                {vista !== 'mias' && t.asignado_a_nombre && <span class="text-muted">→ {t.asignado_a_nombre}</span>}
+                {vista === 'mias' && t.asignado_por_nombre && <span class="text-muted">de {t.asignado_por_nombre}</span>}
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;flex-direction:column;align-items:flex-end">
+              <span class={`chip ${estadoColor[t.estado] ?? ''}`}>{t.estado.replace('_', ' ')}</span>
+              {t.prioridad && <span class={`chip ${prioColor[t.prioridad] ?? ''}`}>{t.prioridad}</span>}
+            </div>
+          </div>
+        </a>
+      ))}
+    </section>
+  ))}
+</Layout>

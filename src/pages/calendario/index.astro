@@ -4,8 +4,10 @@ import EmptyState from '../../components/EmptyState.astro';
 import { requireUser } from '../../lib/session';
 import { getDB } from '../../lib/db';
 
-requireUser(Astro);
+const user = requireUser(Astro);
 const db = getDB(Astro);
+
+const vista = Astro.url.searchParams.get('vista') ?? 'mias';
 
 interface Event {
   fecha: string;
@@ -18,107 +20,116 @@ interface Event {
   marca?: string | null;
 }
 
-// Range: 30 days back, 60 days forward
 const today = new Date();
 const startStr = new Date(today.getTime() - 30 * 86400000).toISOString().slice(0, 10);
 const endStr = new Date(today.getTime() + 60 * 86400000).toISOString().slice(0, 10);
 
-const acciones = await db
-  .prepare(
-    `SELECT fecha, tarea, prioridad, done, contacto_id, produccion_id
-     FROM acciones_calendario
-     WHERE fecha BETWEEN ? AND ?
-     ORDER BY fecha`
-  )
-  .bind(startStr, endStr)
-  .all<any>();
+let events: Event[] = [];
 
-const producciones = await db
-  .prepare(
-    `SELECT id, titulo, fecha_inicio as fecha, marca_id, estado, ubicacion_shoot
-     FROM producciones
-     WHERE fecha_inicio BETWEEN ? AND ?
-     ORDER BY fecha_inicio`
-  )
-  .bind(startStr, endStr)
-  .all<any>();
+if (vista === 'mias') {
+  // Solo tareas asignadas a este usuario
+  const tareas = await db
+    .prepare(
+      `SELECT a.id, a.fecha, a.tarea, a.descripcion, a.prioridad, a.estado, a.done, a.produccion_id,
+              p.titulo as produccion_titulo
+       FROM acciones_calendario a
+       LEFT JOIN producciones p ON p.id = a.produccion_id
+       WHERE a.asignado_a = ? AND a.fecha BETWEEN ? AND ?
+       ORDER BY a.fecha`
+    )
+    .bind(user.id, startStr, endStr)
+    .all<any>();
 
-const briefsPiezas = await db
-  .prepare(
-    `SELECT id, titulo, fecha_publicacion as fecha, marca_id, estado, plataforma, formato
-     FROM briefs
-     WHERE fecha_publicacion BETWEEN ? AND ?
-     ORDER BY fecha_publicacion`
-  )
-  .bind(startStr, endStr)
-  .all<any>();
-
-const piezas = await db
-  .prepare(
-    `SELECT id, titulo, fecha_programada as fecha, marca_id, estado, plataforma, formato
-     FROM piezas_contenido
-     WHERE fecha_programada BETWEEN ? AND ?
-     ORDER BY fecha_programada`
-  )
-  .bind(startStr, endStr)
-  .all<any>();
-
-const proxAccionesContactos = await db
-  .prepare(
-    `SELECT id, nombre, next_action_date as fecha, next_action_text as detalle, tipo
-     FROM contactos
-     WHERE next_action_date BETWEEN ? AND ? AND estatus_crm != 'cerrado'
-     ORDER BY next_action_date`
-  )
-  .bind(startStr, endStr)
-  .all<any>();
-
-const events: Event[] = [
-  ...((acciones.results ?? []) as any[]).map((e) => ({
+  events = ((tareas.results ?? []) as any[]).map((e) => ({
     fecha: e.fecha,
     tipo: 'Tarea',
     titulo: e.tarea,
-    detalle: null,
-    href: '/contactos',
-    done: !!e.done,
+    detalle: e.produccion_titulo ? `↳ ${e.produccion_titulo}` : (e.descripcion ?? null),
+    href: `/tareas/${e.id}`,
+    done: e.estado === 'completada',
     prioridad: e.prioridad
-  })),
-  ...((producciones.results ?? []) as any[]).map((e) => ({
-    fecha: e.fecha,
-    tipo: 'Producción',
-    titulo: e.titulo,
-    detalle: e.ubicacion_shoot,
-    href: `/producciones/${e.id}`,
-    marca: e.marca_id
-  })),
-  ...((briefsPiezas.results ?? []) as any[]).map((e) => ({
-    fecha: e.fecha,
-    tipo: 'Brief',
-    titulo: e.titulo,
-    detalle: [e.formato, e.plataforma].filter(Boolean).join(' / '),
-    href: `/briefs/${e.id}`,
-    marca: e.marca_id
-  })),
-  ...((piezas.results ?? []) as any[]).map((e) => ({
-    fecha: e.fecha,
-    tipo: 'Pieza',
-    titulo: e.titulo,
-    detalle: [e.formato, e.plataforma].filter(Boolean).join(' / '),
-    href: '/contenido',
-    marca: e.marca_id
-  })),
-  ...((proxAccionesContactos.results ?? []) as any[]).map((e) => ({
-    fecha: e.fecha,
-    tipo: 'Contacto',
-    titulo: `${e.nombre} — ${e.detalle || 'sin detalle'}`,
-    detalle: e.tipo,
-    href: `/contactos/${e.id}`
-  }))
-];
+  }));
+} else {
+  // Vista general: producciones, briefs, piezas, próximas acciones contactos
+  const producciones = await db
+    .prepare(
+      `SELECT p.id, p.titulo, p.fecha_inicio as fecha, p.marca_id, p.estado, p.ubicacion_shoot,
+              p.tipo_produccion, c.nombre as cliente_nombre
+       FROM producciones p
+       LEFT JOIN clientes c ON c.id = p.cliente_id
+       WHERE p.fecha_inicio BETWEEN ? AND ? AND p.estado != 'cancelada'
+       ORDER BY p.fecha_inicio`
+    )
+    .bind(startStr, endStr)
+    .all<any>();
+
+  const briefsPiezas = await db
+    .prepare(
+      `SELECT id, titulo, fecha_publicacion as fecha, marca_id, estado, plataforma, formato
+       FROM briefs
+       WHERE fecha_publicacion BETWEEN ? AND ?
+       ORDER BY fecha_publicacion`
+    )
+    .bind(startStr, endStr)
+    .all<any>();
+
+  const piezas = await db
+    .prepare(
+      `SELECT id, titulo, fecha_programada as fecha, marca_id, estado, plataforma, formato
+       FROM piezas_contenido
+       WHERE fecha_programada BETWEEN ? AND ?
+       ORDER BY fecha_programada`
+    )
+    .bind(startStr, endStr)
+    .all<any>();
+
+  const proxAccionesContactos = await db
+    .prepare(
+      `SELECT id, nombre, next_action_date as fecha, next_action_text as detalle, tipo
+       FROM contactos
+       WHERE next_action_date BETWEEN ? AND ? AND estatus_crm != 'cerrado'
+       ORDER BY next_action_date`
+    )
+    .bind(startStr, endStr)
+    .all<any>();
+
+  events = [
+    ...((producciones.results ?? []) as any[]).map((e) => ({
+      fecha: e.fecha,
+      tipo: e.tipo_produccion ?? 'Producción',
+      titulo: e.titulo,
+      detalle: [e.cliente_nombre, e.ubicacion_shoot].filter(Boolean).join(' · ') || null,
+      href: `/producciones/${e.id}`,
+      marca: e.marca_id
+    })),
+    ...((briefsPiezas.results ?? []) as any[]).map((e) => ({
+      fecha: e.fecha,
+      tipo: 'Brief',
+      titulo: e.titulo,
+      detalle: [e.formato, e.plataforma].filter(Boolean).join(' / '),
+      href: `/briefs/${e.id}`,
+      marca: e.marca_id
+    })),
+    ...((piezas.results ?? []) as any[]).map((e) => ({
+      fecha: e.fecha,
+      tipo: 'Pieza',
+      titulo: e.titulo,
+      detalle: [e.formato, e.plataforma].filter(Boolean).join(' / '),
+      href: '/contenido',
+      marca: e.marca_id
+    })),
+    ...((proxAccionesContactos.results ?? []) as any[]).map((e) => ({
+      fecha: e.fecha,
+      tipo: 'Contacto',
+      titulo: `${e.nombre} — ${e.detalle || 'sin detalle'}`,
+      detalle: e.tipo,
+      href: `/contactos/${e.id}`
+    }))
+  ];
+}
 
 events.sort((a, b) => a.fecha.localeCompare(b.fecha));
 
-// Group by date
 const byDate: Record<string, Event[]> = {};
 for (const e of events) {
   byDate[e.fecha] = byDate[e.fecha] ?? [];
@@ -147,12 +158,19 @@ function fmtFecha(s: string) {
     <span class="text-muted" style="font-size:12px">{startStr} → {endStr}</span>
   </div>
 
+  <div class="filters" style="margin-bottom:8px">
+    <a href="/calendario?vista=mias" class={`filter-chip ${vista === 'mias' ? 'active' : ''}`}>mis tareas</a>
+    <a href="/calendario?vista=general" class={`filter-chip ${vista === 'general' ? 'active' : ''}`}>general</a>
+  </div>
+
   <p class="text-muted" style="font-size:12px;margin-bottom:24px">
-    Vista unificada: producciones de Vic, briefs y piezas de Andrea, tareas de Victoria, próximas acciones de contactos.
+    {vista === 'mias'
+      ? 'Tus tareas asignadas con fecha en esta ventana.'
+      : 'Producciones, briefs, piezas, próximas acciones de contactos.'}
   </p>
 
   {sortedDates.length === 0 ? (
-    <EmptyState title="Sin eventos" message="No hay nada agendado en esta ventana de fechas." />
+    <EmptyState title="Sin eventos" message={vista === 'mias' ? 'No tienes tareas con fecha en esta ventana.' : 'No hay nada agendado en esta ventana de fechas.'} />
   ) : (
     sortedDates.map((date) => (
       <div style={`margin-bottom:24px;${date === todayStr ? 'border-left:3px solid var(--gold);padding-left:16px' : ''}`}>
@@ -166,7 +184,7 @@ function fmtFecha(s: string) {
                   {e.detalle && <small class="text-muted">{e.detalle}</small>}
                 </div>
                 <div style="display:flex;gap:6px;flex-direction:column;align-items:flex-end">
-                  <span class={`chip ${chipTipo[e.tipo] ?? ''}`}>{e.tipo}</span>
+                  <span class={`chip ${chipTipo[e.tipo] ?? 'chip-gold'}`}>{e.tipo}</span>
                   {e.marca && <small class="text-muted">{e.marca}</small>}
                   {e.prioridad && <span class={`chip ${e.prioridad === 'Alta' ? 'chip-danger' : 'chip'}`}>{e.prioridad}</span>}
                 </div>

@@ -1,0 +1,227 @@
+---
+import Layout from '../../components/Layout.astro';
+import { requireUser, canEdit } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { formatFecha } from '../../lib/fechas';
+
+const user = requireUser(Astro);
+const db = getDB(Astro);
+const editable = canEdit(user);
+const { id } = Astro.params;
+
+let saved = false;
+let error: string | null = null;
+
+if (Astro.request.method === 'POST' && editable) {
+  const form = await Astro.request.formData();
+  const method = form.get('_method');
+  const action = form.get('_action');
+
+  if (method === 'DELETE') {
+    await db.prepare('DELETE FROM acciones_calendario WHERE id = ?').bind(id).run();
+    return Astro.redirect('/tareas');
+  }
+
+  if (action === 'set_estado') {
+    const nuevo = form.get('estado') as string;
+    const valid = ['pendiente', 'en_curso', 'completada', 'cancelada'];
+    if (valid.includes(nuevo)) {
+      const done = nuevo === 'completada' ? 1 : 0;
+      const completed = nuevo === 'completada' ? now() : null;
+      await db
+        .prepare('UPDATE acciones_calendario SET estado = ?, done = ?, completed_at = ?, updated_at = ? WHERE id = ?')
+        .bind(nuevo, done, completed, now(), id)
+        .run();
+    }
+    return Astro.redirect(`/tareas/${id}`);
+  }
+
+  // Update general
+  const titulo = (form.get('tarea') as string)?.trim();
+  if (!titulo) {
+    error = 'El título es obligatorio.';
+  } else {
+    const get = (k: string) => {
+      const v = form.get(k);
+      return v === null || v === '' ? null : String(v).trim();
+    };
+    await db
+      .prepare(
+        `UPDATE acciones_calendario SET
+          tarea = ?, descripcion = ?, fecha = ?, prioridad = ?,
+          asignado_a = ?, produccion_id = ?, updated_at = ?
+        WHERE id = ?`
+      )
+      .bind(
+        titulo,
+        get('descripcion'),
+        get('fecha'),
+        get('prioridad') ?? 'Media',
+        get('asignado_a'),
+        get('produccion_id'),
+        now(),
+        id
+      )
+      .run();
+    saved = true;
+  }
+}
+
+const tarea = await db
+  .prepare(
+    `SELECT a.*, u1.nombre as asignado_a_nombre, u2.nombre as asignado_por_nombre,
+            p.titulo as produccion_titulo
+     FROM acciones_calendario a
+     LEFT JOIN users u1 ON u1.id = a.asignado_a
+     LEFT JOIN users u2 ON u2.id = a.asignado_por
+     LEFT JOIN producciones p ON p.id = a.produccion_id
+     WHERE a.id = ?`
+  )
+  .bind(id)
+  .first<any>();
+
+if (!tarea) return Astro.redirect('/tareas');
+
+const { results: usuarios } = await db
+  .prepare("SELECT id, nombre FROM users WHERE activo = 1 ORDER BY nombre")
+  .all<{ id: string; nombre: string }>();
+
+const { results: producciones } = await db
+  .prepare("SELECT id, titulo FROM producciones WHERE estado != 'cancelada' ORDER BY fecha_inicio DESC LIMIT 100")
+  .all<{ id: string; titulo: string }>();
+
+const estadoColor: Record<string, string> = {
+  pendiente: 'chip-warning',
+  en_curso: 'chip-gold',
+  completada: 'chip-ok',
+  cancelada: 'chip'
+};
+
+const todayStr = new Date().toISOString().slice(0, 10);
+const vencida = tarea.fecha && tarea.fecha < todayStr && tarea.estado !== 'completada' && tarea.estado !== 'cancelada';
+const esMia = tarea.asignado_a === user.id;
+---
+
+<Layout title={tarea.tarea} pageTitle={tarea.tarea}>
+  <div class="page-head">
+    <h1>{tarea.tarea}</h1>
+    <div style="display:flex;gap:10px">
+      <a href="/tareas" class="btn btn-sm">Volver</a>
+      {editable && (
+        <form method="POST" action={`/tareas/${id}`} onsubmit="return confirm('¿Eliminar esta tarea?')" style="display:inline">
+          <input type="hidden" name="_method" value="DELETE" />
+          <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
+        </form>
+      )}
+    </div>
+  </div>
+
+  {saved && <p class="text-ok" style="margin-bottom:20px">Guardado.</p>}
+  {error && <p class="text-danger" style="margin-bottom:20px">{error}</p>}
+
+  {vencida && (
+    <div class="card" style="margin-bottom:20px;border-left:3px solid var(--danger,#e25555)">
+      <strong style="color:var(--danger,#e25555)">Vencida</strong>
+      <small class="text-muted" style="margin-left:8px">venció el {formatFecha(tarea.fecha)}</small>
+    </div>
+  )}
+
+  <div class="row" style="margin-bottom:24px">
+    <div class="col card">
+      <div class="card-meta">Estado</div>
+      <form method="POST" action={`/tareas/${id}`} style="margin-top:8px">
+        <input type="hidden" name="_action" value="set_estado" />
+        <select class="select" name="estado" onchange="this.form.submit()" disabled={!editable}>
+          <option value="pendiente" selected={tarea.estado === 'pendiente'}>Pendiente</option>
+          <option value="en_curso" selected={tarea.estado === 'en_curso'}>En curso</option>
+          <option value="completada" selected={tarea.estado === 'completada'}>Completada</option>
+          <option value="cancelada" selected={tarea.estado === 'cancelada'}>Cancelada</option>
+        </select>
+      </form>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Fecha de entrega</div>
+      <div class="card-title mono" style={vencida ? 'color:var(--danger,#e25555)' : ''}>{formatFecha(tarea.fecha)}</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Prioridad</div>
+      <div class="card-title">{tarea.prioridad}</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Asignada a</div>
+      <div class="card-title">{tarea.asignado_a_nombre ?? '—'}{esMia && ' (tú)'}</div>
+      {tarea.asignado_por_nombre && <small class="text-muted">de {tarea.asignado_por_nombre}</small>}
+    </div>
+  </div>
+
+  {esMia && tarea.estado === 'pendiente' && editable && (
+    <div style="margin-bottom:24px;display:flex;gap:10px">
+      <form method="POST" action={`/tareas/${id}`}>
+        <input type="hidden" name="_action" value="set_estado" />
+        <input type="hidden" name="estado" value="en_curso" />
+        <button type="submit" class="btn">Marcar en curso</button>
+      </form>
+      <form method="POST" action={`/tareas/${id}`}>
+        <input type="hidden" name="_action" value="set_estado" />
+        <input type="hidden" name="estado" value="completada" />
+        <button type="submit" class="btn btn-primary">Completar</button>
+      </form>
+    </div>
+  )}
+
+  {esMia && tarea.estado === 'en_curso' && editable && (
+    <div style="margin-bottom:24px">
+      <form method="POST" action={`/tareas/${id}`} style="display:inline">
+        <input type="hidden" name="_action" value="set_estado" />
+        <input type="hidden" name="estado" value="completada" />
+        <button type="submit" class="btn btn-primary">Completar</button>
+      </form>
+    </div>
+  )}
+
+  <h2 style="margin-top:32px">Detalles</h2>
+  <form method="POST" action={`/tareas/${id}`}>
+    <label class="label">Título</label>
+    <input class="input" name="tarea" value={tarea.tarea} required />
+
+    <label class="label">Descripción</label>
+    <textarea class="textarea" name="descripcion">{tarea.descripcion ?? ''}</textarea>
+
+    <div class="row">
+      <div class="col">
+        <label class="label">Asignada a</label>
+        <select class="select" name="asignado_a">
+          {usuarios?.map((u) => (
+            <option value={u.id} selected={tarea.asignado_a === u.id}>{u.nombre}</option>
+          ))}
+        </select>
+      </div>
+      <div class="col">
+        <label class="label">Fecha de entrega</label>
+        <input class="input" type="date" name="fecha" value={tarea.fecha ?? ''} />
+      </div>
+      <div class="col">
+        <label class="label">Prioridad</label>
+        <select class="select" name="prioridad">
+          {['Alta', 'Media', 'Baja'].map((p) => (
+            <option value={p} selected={tarea.prioridad === p}>{p}</option>
+          ))}
+        </select>
+      </div>
+    </div>
+
+    <label class="label">Vincular a producción</label>
+    <select class="select" name="produccion_id">
+      <option value="">— ninguna —</option>
+      {producciones?.map((p) => (
+        <option value={p.id} selected={tarea.produccion_id === p.id}>{p.titulo}</option>
+      ))}
+    </select>
+
+    {editable && (
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Guardar cambios</button>
+      </div>
+    )}
+  </form>
+</Layout>
