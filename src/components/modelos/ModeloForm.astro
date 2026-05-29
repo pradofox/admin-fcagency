@@ -33,8 +33,11 @@ interface Props {
   submitLabel: string;
 }
 
+import { calcularEdad } from '../../lib/fechas';
+
 const { modelo = {}, action, method = 'POST', submitLabel } = Astro.props;
 const isEdit = method === 'PATCH';
+const edadInicial = calcularEdad(modelo.cumpleanos);
 ---
 
 <form method={isEdit ? 'POST' : 'POST'} action={action} id="modelo-form">
@@ -60,8 +63,13 @@ const isEdit = method === 'PATCH';
       <input class="input" name="instagram" value={modelo.instagram ?? ''} placeholder="usuario" />
     </div>
     <div class="col">
-      <label class="label">Cumpleaños</label>
-      <input class="input" name="cumpleanos" type="date" value={modelo.cumpleanos ?? ''} />
+      <label class="label">
+        Cumpleaños
+        <span id="edad-badge" class="text-muted" style={`font-weight:400;margin-left:8px${edadInicial == null ? ';display:none' : ''}`}>
+          {edadInicial != null ? `· ${edadInicial} años` : ''}
+        </span>
+      </label>
+      <input class="input" name="cumpleanos" id="inp-cumpleanos" value={modelo.cumpleanos ?? ''} placeholder="DD/MM/AAAA · ej 19/01/1992" autocomplete="off" />
     </div>
   </div>
 
@@ -154,3 +162,45 @@ const isEdit = method === 'PATCH';
     <a href="/modelos" class="btn">Cancelar</a>
   </div>
 </form>
+
+<script is:inline>
+  (function () {
+    const MESES = {
+      enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6,
+      julio: 7, agosto: 8, septiembre: 9, setiembre: 9, octubre: 10,
+      noviembre: 11, diciembre: 12,
+    };
+    function parse(raw) {
+      if (!raw) return null;
+      const s = String(raw).trim().toLowerCase();
+      if (!s) return null;
+      let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+      if (m) return { anio: +m[1], mes: +m[2], dia: +m[3] };
+      m = /^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/.exec(s);
+      if (m) return { dia: +m[1], mes: +m[2], anio: m[3] ? +m[3] : null };
+      m = /^(\d{1,2})\s+(?:de\s+)?([a-záéíóúñ]+)(?:\s+(?:de\s+)?(\d{4}))?/.exec(s);
+      if (m && MESES[m[2]]) return { dia: +m[1], mes: MESES[m[2]], anio: m[3] ? +m[3] : null };
+      m = /^([a-záéíóúñ]+)\s+(\d{1,2})/.exec(s);
+      if (m && MESES[m[1]]) return { dia: +m[2], mes: MESES[m[1]], anio: null };
+      return null;
+    }
+    function edad(raw) {
+      const c = parse(raw);
+      if (!c || !c.anio) return null;
+      const ref = new Date();
+      let e = ref.getFullYear() - c.anio;
+      const mm = ref.getMonth() + 1, dd = ref.getDate();
+      if (mm < c.mes || (mm === c.mes && dd < c.dia)) e--;
+      return e >= 0 && e < 120 ? e : null;
+    }
+    const inp = document.getElementById('inp-cumpleanos');
+    const badge = document.getElementById('edad-badge');
+    if (inp && badge) {
+      inp.addEventListener('input', function () {
+        const e = edad(inp.value);
+        if (e == null) { badge.style.display = 'none'; badge.textContent = ''; }
+        else { badge.style.display = ''; badge.textContent = '· ' + e + ' años'; }
+      });
+    }
+  })();
+</script>
