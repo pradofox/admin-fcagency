@@ -188,18 +188,18 @@ const ROLES = [
   {saved && <p class="text-ok" style="margin-bottom:20px">Guardado.</p>}
   {error && <p class="text-danger" style="margin-bottom:20px">{error}</p>}
 
-  <div class="row" style="margin-bottom:32px">
-    <div class="col card">
-      <div class="card-meta">Cobro total</div>
-      <div class="card-title" style="color:var(--gold)">{fmt(totalCobro)}</div>
+  <div class="grid-dense" style="margin-bottom:24px">
+    <div class="stat stat-gold">
+      <div class="stat-value">{fmt(totalCobro)}</div>
+      <div class="stat-label">Cobro total</div>
     </div>
-    <div class="col card">
-      <div class="card-meta">Pago a proveedores</div>
-      <div class="card-title">{fmt(totalPago)}</div>
+    <div class="stat">
+      <div class="stat-value">{fmt(totalPago)}</div>
+      <div class="stat-label">Pago proveedores</div>
     </div>
-    <div class="col card">
-      <div class="card-meta">Utilidad</div>
-      <div class="card-title" style="color:var(--ok)">{fmt(utilidad)}</div>
+    <div class="stat stat-ok">
+      <div class="stat-value">{fmt(utilidad)}</div>
+      <div class="stat-label">Utilidad</div>
     </div>
   </div>
 
@@ -210,43 +210,49 @@ const ROLES = [
   </p>
 
   {lineas && lineas.length > 0 ? (
-    <div style="overflow-x:auto;margin-bottom:24px">
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
+    <div class="table-card" style="margin-bottom:16px">
+      <table>
         <thead>
-          <tr style="border-bottom:1px solid var(--border);text-align:left">
-            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Rol</th>
-            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Nombre</th>
-            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Cobro</th>
-            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Comisión</th>
-            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Pago</th>
-            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Estado</th>
+          <tr>
+            <th>Rol</th>
+            <th>Nombre</th>
+            <th class="right">Cobro</th>
+            <th class="right">Comisión</th>
+            <th class="right">Pago</th>
+            <th>Estado</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
           {lineas.map((l) => (
-            <tr style="border-bottom:1px solid var(--border)">
-              <td style="padding:12px 10px">{l.rol}</td>
-              <td style="padding:12px 10px">{l.nombre_libre ?? '—'}</td>
-              <td style="padding:12px 10px;text-align:right">{fmt(l.cobro_cliente)}</td>
-              <td style="padding:12px 10px;text-align:right">{l.comision_pct}%</td>
-              <td style="padding:12px 10px;text-align:right;color:var(--gold)">{fmt(l.pago_proveedor)}</td>
-              <td style="padding:12px 10px">
-                <form method="POST" action={`/producciones/${id}`} style="display:inline">
-                  <input type="hidden" name="_action" value="toggle_linea_pagada" />
-                  <input type="hidden" name="linea_id" value={l.id} />
-                  <input type="hidden" name="nuevo_estado" value={l.estado === 'pagado' ? 'pendiente' : 'pagado'} />
-                  <button type="submit" class={`chip ${l.estado === 'pagado' ? 'chip-ok' : 'chip-warning'}`} style="border:0;cursor:pointer">
-                    {l.estado}
-                  </button>
-                </form>
+            <tr>
+              <td><span class="chip">{l.rol}</span></td>
+              <td>{l.nombre_libre ?? <span class="text-muted">—</span>}</td>
+              <td class="right mono">{fmt(l.cobro_cliente)}</td>
+              <td class="right mono text-muted">{l.comision_pct}%</td>
+              <td class="right mono text-gold">{fmt(l.pago_proveedor)}</td>
+              <td>
+                {editable ? (
+                  <form method="POST" action={`/producciones/${id}`} style="display:inline">
+                    <input type="hidden" name="_action" value="toggle_linea_pagada" />
+                    <input type="hidden" name="linea_id" value={l.id} />
+                    <input type="hidden" name="nuevo_estado" value={l.estado === 'pagado' ? 'pendiente' : 'pagado'} />
+                    <button type="submit" class={`chip ${l.estado === 'pagado' ? 'chip-ok' : 'chip-warning'}`} style="border:0;cursor:pointer;font-family:var(--font-mono)">
+                      {l.estado}
+                    </button>
+                  </form>
+                ) : (
+                  <span class={`chip ${l.estado === 'pagado' ? 'chip-ok' : 'chip-warning'}`}>{l.estado}</span>
+                )}
               </td>
-              <td style="padding:12px 10px">
-                <form method="POST" action={`/producciones/${id}`} onsubmit="return confirm('¿Eliminar esta línea?')" style="display:inline">
-                  <input type="hidden" name="_action" value="delete_linea" />
-                  <input type="hidden" name="linea_id" value={l.id} />
-                  <button type="submit" class="btn btn-sm btn-danger">×</button>
-                </form>
+              <td class="right">
+                {editable && (
+                  <form method="POST" action={`/producciones/${id}`} onsubmit="return confirm('¿Eliminar esta línea?')" style="display:inline">
+                    <input type="hidden" name="_action" value="delete_linea" />
+                    <input type="hidden" name="linea_id" value={l.id} />
+                    <button type="submit" class="btn btn-sm btn-danger" style="padding:2px 7px">×</button>
+                  </form>
+                )}
               </td>
             </tr>
           ))}
@@ -254,7 +260,7 @@ const ROLES = [
       </table>
     </div>
   ) : (
-    <p class="text-muted" style="margin-bottom:24px">Aún no hay líneas.</p>
+    <p class="text-muted" style="margin-bottom:16px">Aún no hay líneas.</p>
   )}
 
   <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:32px">

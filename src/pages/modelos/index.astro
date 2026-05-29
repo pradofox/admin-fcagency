@@ -47,15 +47,13 @@ const totalAspirantes = await db.prepare("SELECT COUNT(*) as c FROM modelos WHER
     </div>
   </div>
 
-  <form method="GET" action="/modelos" style="margin-bottom:16px">
+  <form method="GET" action="/modelos" class="toolbar">
     <input
       class="input"
       type="search"
       name="q"
       value={search}
-      placeholder="Buscar por nombre, instagram, ciudad..."
-      autofocus
-      style="max-width:480px"
+      placeholder="Buscar por nombre, instagram, ciudad…"
     />
   </form>
 

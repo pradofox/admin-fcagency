@@ -89,51 +89,51 @@ const fmt = (n: number | null) =>
     <small class="text-muted">{new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' })}</small>
   </div>
 
-  <h2 style="margin-bottom:14px">Resumen</h2>
-  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr));margin-bottom:36px">
-    <a href="/modelos" class="card" style="display:block;color:inherit">
-      <div class="card-title">{modelosActivas}</div>
-      <div class="card-meta">Modelos activas</div>
+  <h2>Resumen</h2>
+  <div class="grid-dense" style="margin-bottom:28px">
+    <a href="/modelos" class="stat" style="display:block;color:inherit">
+      <div class="stat-value">{modelosActivas}</div>
+      <div class="stat-label">Modelos activas</div>
     </a>
-    <a href="/producciones" class="card" style="display:block;color:inherit">
-      <div class="card-title">{produccionesEnCurso}</div>
-      <div class="card-meta">Producciones vivas</div>
+    <a href="/producciones" class="stat" style="display:block;color:inherit">
+      <div class="stat-value">{produccionesEnCurso}</div>
+      <div class="stat-label">Producciones vivas</div>
     </a>
-    <a href="/castings" class="card" style="display:block;color:inherit">
-      <div class="card-title">{castingsAbiertos}</div>
-      <div class="card-meta">Castings abiertos</div>
+    <a href="/castings" class="stat" style="display:block;color:inherit">
+      <div class="stat-value">{castingsAbiertos}</div>
+      <div class="stat-label">Castings abiertos</div>
     </a>
-    <a href="/briefs" class="card" style="display:block;color:inherit">
-      <div class="card-title">{briefsVivos}</div>
-      <div class="card-meta">Briefs vivos</div>
+    <a href="/briefs" class="stat" style="display:block;color:inherit">
+      <div class="stat-value">{briefsVivos}</div>
+      <div class="stat-label">Briefs vivos</div>
     </a>
-    <a href="/contenido" class="card" style="display:block;color:inherit">
-      <div class="card-title">{piezasPendientes}</div>
-      <div class="card-meta">Piezas por publicar</div>
+    <a href="/contenido" class="stat" style="display:block;color:inherit">
+      <div class="stat-value">{piezasPendientes}</div>
+      <div class="stat-label">Piezas por publicar</div>
     </a>
-    <a href="/contactos" class="card" style="display:block;color:inherit">
-      <div class="card-title">{contactosTotal}</div>
-      <div class="card-meta">Contactos</div>
+    <a href="/contactos" class="stat" style="display:block;color:inherit">
+      <div class="stat-value">{contactosTotal}</div>
+      <div class="stat-label">Contactos</div>
     </a>
   </div>
 
-  <h2 style="margin-bottom:14px">Atención requerida</h2>
-  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr));margin-bottom:36px">
-    <a href="/contactos?estatus=pago_pendiente" class="card" style="display:block;color:inherit;border-color:var(--warning)">
-      <div class="card-title" style="color:var(--warning)">{contactosConPagoPendiente}</div>
-      <div class="card-meta">Pago cliente pendiente</div>
+  <h2>Atención requerida</h2>
+  <div class="grid-dense" style="margin-bottom:28px">
+    <a href="/contactos?estatus=pago_pendiente" class="stat stat-warning" style="display:block;color:inherit">
+      <div class="stat-value">{contactosConPagoPendiente}</div>
+      <div class="stat-label">Pago cliente pendiente</div>
     </a>
-    <a href="/producciones" class="card" style="display:block;color:inherit">
-      <div class="card-title">{produccionesEstaSemana}</div>
-      <div class="card-meta">Producciones próximos 7 días</div>
+    <a href="/producciones" class="stat" style="display:block;color:inherit">
+      <div class="stat-value">{produccionesEstaSemana}</div>
+      <div class="stat-label">Próximos 7 días</div>
     </a>
-    <a href="/modelos" class="card" style="display:block;color:inherit">
-      <div class="card-title" style="color:var(--gold)">{modelosPendientesMaterial}</div>
-      <div class="card-meta">Modelos con material pendiente</div>
+    <a href="/modelos" class="stat stat-gold" style="display:block;color:inherit">
+      <div class="stat-value">{modelosPendientesMaterial}</div>
+      <div class="stat-label">Modelos con material pendiente</div>
     </a>
-    <a href="/contactos" class="card" style="display:block;color:inherit">
-      <div class="card-title">{contactosConRetroPendiente}</div>
-      <div class="card-meta">Cerrados sin retro</div>
+    <a href="/contactos" class="stat" style="display:block;color:inherit">
+      <div class="stat-value">{contactosConRetroPendiente}</div>
+      <div class="stat-label">Cerrados sin retro</div>
     </a>
   </div>
 
@@ -177,22 +177,22 @@ const fmt = (n: number | null) =>
     </div>
   </div>
 
-  <h2 style="margin-bottom:14px">Producciones por marca</h2>
-  <div style="overflow-x:auto;margin-bottom:36px">
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
+  <h2>Producciones por marca</h2>
+  <div class="table-card" style="margin-bottom:28px">
+    <table>
       <thead>
-        <tr style="border-bottom:1px solid var(--border);text-align:left">
-          <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Marca</th>
-          <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Producciones</th>
-          <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Cobrado</th>
+        <tr>
+          <th>Marca</th>
+          <th class="right">Producciones</th>
+          <th class="right">Cobrado</th>
         </tr>
       </thead>
       <tbody>
         {porMarca && porMarca.map((m: any) => (
-          <tr style="border-bottom:1px solid var(--border)">
-            <td style="padding:12px 10px"><strong>{m.marca}</strong></td>
-            <td style="padding:12px 10px;text-align:right">{m.prods}</td>
-            <td style="padding:12px 10px;text-align:right;color:var(--gold)">{fmt(m.cobro)}</td>
+          <tr>
+            <td><strong>{m.marca}</strong></td>
+            <td class="right mono">{m.prods}</td>
+            <td class="right mono text-gold">{fmt(m.cobro)}</td>
           </tr>
         ))}
       </tbody>

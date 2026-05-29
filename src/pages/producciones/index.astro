@@ -53,8 +53,8 @@ const totalProds = (await db.prepare('SELECT COUNT(*) as c FROM producciones').f
     {canEdit(user) && <a href="/producciones/nuevo" class="btn btn-primary">+ Nueva</a>}
   </div>
 
-  <form method="GET" action="/producciones" style="margin-bottom:16px">
-    <input class="input" type="search" name="q" value={search} placeholder="Buscar por título, ubicación, notas..." style="max-width:480px" />
+  <form method="GET" action="/producciones" class="toolbar">
+    <input class="input" type="search" name="q" value={search} placeholder="Buscar por título, ubicación, notas…" />
   </form>
 
   {!search && (

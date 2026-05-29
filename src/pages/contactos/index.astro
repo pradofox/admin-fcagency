@@ -50,8 +50,8 @@ const chipTipo: Record<string, string> = {
     {canEdit(user) && <a href="/contactos/nuevo" class="btn btn-primary">+ Nuevo</a>}
   </div>
 
-  <form method="GET" action="/contactos" style="margin-bottom:16px">
-    <input class="input" type="search" name="q" value={search} placeholder="Buscar por nombre, email, whatsapp, empresa, notas..." style="max-width:480px" />
+  <form method="GET" action="/contactos" class="toolbar">
+    <input class="input" type="search" name="q" value={search} placeholder="Buscar por nombre, email, whatsapp, empresa, notas…" />
   </form>
 
   <div class="filters">

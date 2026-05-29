@@ -75,18 +75,18 @@ const chipEstado: Record<string, string> = {
     desde cada producción individual.
   </p>
 
-  <div class="row" style="margin-bottom:32px">
-    <div class="col card">
-      <div class="card-meta">Cobrado al cliente (sin cancelados)</div>
-      <div class="card-title" style="color:var(--gold)">{fmt(totales?.cobro_total)}</div>
+  <div class="grid-dense" style="margin-bottom:24px">
+    <div class="stat stat-gold">
+      <div class="stat-value">{fmt(totales?.cobro_total)}</div>
+      <div class="stat-label">Cobrado al cliente</div>
     </div>
-    <div class="col card">
-      <div class="card-meta">Pago a proveedores</div>
-      <div class="card-title">{fmt(totales?.pago_total)}</div>
+    <div class="stat">
+      <div class="stat-value">{fmt(totales?.pago_total)}</div>
+      <div class="stat-label">Pago a proveedores</div>
     </div>
-    <div class="col card">
-      <div class="card-meta">Utilidad</div>
-      <div class="card-title" style="color:var(--ok)">{fmt(totales?.utilidad_total)}</div>
+    <div class="stat stat-ok">
+      <div class="stat-value">{fmt(totales?.utilidad_total)}</div>
+      <div class="stat-label">Utilidad</div>
     </div>
   </div>
 
@@ -104,31 +104,29 @@ const chipEstado: Record<string, string> = {
   </div>
 
   {results && results.length > 0 ? (
-    <div style="overflow-x:auto">
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
+    <div class="table-card">
+      <table>
         <thead>
-          <tr style="border-bottom:1px solid var(--border);text-align:left">
-            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Proveedor</th>
-            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Rol</th>
-            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Estado</th>
-            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Líneas</th>
-            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Cobrado</th>
-            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Pago</th>
-            <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Utilidad</th>
+          <tr>
+            <th>Proveedor</th>
+            <th>Rol</th>
+            <th>Estado</th>
+            <th class="right">Líneas</th>
+            <th class="right">Cobrado</th>
+            <th class="right">Pago</th>
+            <th class="right">Utilidad</th>
           </tr>
         </thead>
         <tbody>
           {results.map((r: any) => (
-            <tr style="border-bottom:1px solid var(--border)">
-              <td style="padding:12px 10px"><strong>{r.nombre}</strong></td>
-              <td style="padding:12px 10px">{r.rol}</td>
-              <td style="padding:12px 10px">
-                <span class={`chip ${chipEstado[r.estado] ?? ''}`}>{r.estado}</span>
-              </td>
-              <td style="padding:12px 10px;text-align:right">{r.cuenta}</td>
-              <td style="padding:12px 10px;text-align:right">{fmt(r.cobro_total)}</td>
-              <td style="padding:12px 10px;text-align:right;color:var(--gold)">{fmt(r.pago_total)}</td>
-              <td style="padding:12px 10px;text-align:right;color:var(--ok)">{fmt(r.utilidad_total)}</td>
+            <tr>
+              <td><strong>{r.nombre}</strong></td>
+              <td class="text-muted">{r.rol}</td>
+              <td><span class={`chip ${chipEstado[r.estado] ?? ''}`}>{r.estado}</span></td>
+              <td class="right mono">{r.cuenta}</td>
+              <td class="right mono">{fmt(r.cobro_total)}</td>
+              <td class="right mono text-gold">{fmt(r.pago_total)}</td>
+              <td class="right mono text-ok">{fmt(r.utilidad_total)}</td>
             </tr>
           ))}
         </tbody>
