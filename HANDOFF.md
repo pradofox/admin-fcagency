@@ -1,274 +1,272 @@
-# Handoff — Trabajar admin-fcagency desde otra computadora
+# Handoff — admin-fcagency
 
-Setup completo para que puedas clonar el proyecto en otra Mac (o cualquier máquina con tus credenciales) y seguir editando con todos los accesos.
+> **Quick link para Claude Code en cualquier Mac:**
+> https://raw.githubusercontent.com/pradofox/admin-fcagency/main/HANDOFF.md
+>
+> Pega ese link a tu Claude Code y dile "lee esto antes de hacer nada". Tendrá el contexto completo del proyecto.
 
----
-
-## 0. Credenciales que necesitas tener acceso
-
-Antes de empezar, ten a mano:
-- **GitHub**: cuenta `pradofox` (mail asociado). Si tienes 2FA, necesitas autenticador o backup codes.
-- **Cloudflare**: cuenta `pradofox@sopadeletras.art` (también con acceso a la cuenta de FC Agency `Contacto@fcagency.mx's Account` via invitación de Member).
-- **Resend**: API key `RESEND_API_KEY` (ya está como secret en CF, no necesitas tocarla a menos que la roten).
-- Opcional: acceso a Firebase consola `fc-agency` (Google login) por si hay que tocar plataformas viejas.
+Este doc te lleva de cero a productivo en una Mac nueva. Si solo vienes a entender qué es esto, lee la sección **1 — Qué es esto** y para.
 
 ---
 
-## 1. Software base (Mac)
+## 1 — Qué es esto
 
+Plataforma admin unificada del Universo FC Agency en producción que reemplaza las 5 plataformas separadas previas (`produ`, `brand-content`, `community`, `model-operation`, `coco`). Construida con Astro + Cloudflare Workers + D1 + auth custom con magic link.
+
+- **Producción:** https://admin.fcagency.mx
+- **Repo:** https://github.com/pradofox/admin-fcagency
+- **Cuenta CF:** `Contacto@fcagency.mx's Account` (id `e4c8b06fcae74500b3b9c17a350953f4`)
+- **D1:** `fc-admin` (id `f77ab0bc-02ef-42ed-b628-62eb21d8f0a4`)
+- **Email:** Resend con dominio `fcagency.mx` verificado
+
+Datos en producción al 2026-05-28:
+- 147 modelos · 30 producciones (87 líneas) · 73 contactos · 18 trabajos modelos · 2 briefs · 2 piezas · 1 casting · 10 acciones calendario
+
+---
+
+## 2 — Quién usa qué
+
+| Persona | Rol | Plataforma vieja que operaba |
+|---|---|---|
+| Fely | Dueña, admin general | todas (supervisión) |
+| Roberto Prado | Soporte técnico, admin | n/a |
+| Vic | Producciones, pagos | `fc-agency-produ` |
+| Andrea M | Brand content, briefs, KPIs | `fc-agency-brand-content` |
+| Victoria | CRM tracker | `fc-agency-community` |
+| Renata Ondarza | Roster modelos, castings | `fc-agency-model-operation` |
+
+Las 4 plataformas viejas siguen vivas en Firebase RTDB mientras el equipo se adapta. NO se tocan.
+
+---
+
+## 3 — Setup desde cero en otra Mac (20 min)
+
+### 3.1 — Software base
 ```bash
 # Si no tienes Homebrew:
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# Esenciales:
+# Esenciales
 brew install node git gh
 brew install --cask visual-studio-code
 
-# Claude Code:
+# Claude Code
 npm install -g @anthropic-ai/claude-code
 ```
 
-Verifica:
+### 3.2 — Logins
 ```bash
-node --version  # >= v20
-gh --version
-claude --version
+gh auth login          # GitHub.com → HTTPS → browser → autoriza
+claude                  # browser login Anthropic, después /exit
 ```
 
----
-
-## 2. Logins
-
-```bash
-# GitHub
-gh auth login
-# Selecciona: GitHub.com → HTTPS → Login with browser → autoriza
-# Comprueba: gh api user | jq .login   # debe decir "pradofox"
-
-# Claude Code
-claude
-# Te abre browser para login con tu cuenta Anthropic. Después /exit.
-
-# Cloudflare Wrangler (login via npx desde el repo, ver siguiente paso)
-```
-
----
-
-## 3. Clonar y configurar admin-fcagency
-
+### 3.3 — Clonar y configurar
 ```bash
 mkdir -p ~/Code && cd ~/Code
 gh repo clone pradofox/admin-fcagency
 cd admin-fcagency
-
 npm install
-```
 
-### Login en Wrangler
-```bash
+# Login Cloudflare (abre browser)
 npx wrangler login
-# Abre browser → autoriza con pradofox@sopadeletras.art
-# Verifica acceso a ambas cuentas:
+# Comprueba que ves AMBAS cuentas:
 npx wrangler whoami
-# Debe mostrar: Pradofox@sopadeletras.art's Account + Contacto@fcagency.mx's Account
+# Debe listar: Pradofox@sopadeletras.art + Contacto@fcagency.mx
 ```
 
-### Verificar conexión a la D1 remota
+### 3.4 — Verificar conexión a D1
 ```bash
-npx wrangler d1 execute fc-admin --remote --command="SELECT COUNT(*) as c FROM modelos"
-# Debe responder con el conteo (147 al momento de este handoff)
+npx wrangler d1 execute fc-admin --remote --command="SELECT COUNT(*) FROM modelos"
+# Debe responder 147 (o el conteo real)
 ```
 
-Si el comando falla con "database not found", revisa que `wrangler.toml` tenga:
-```toml
-account_id = "e4c8b06fcae74500b3b9c17a350953f4"
-[[d1_databases]]
-database_id = "f77ab0bc-02ef-42ed-b628-62eb21d8f0a4"
+### 3.5 — Setup local opcional (para dev sin tocar producción)
+```bash
+npm run db:migrate:local        # corre las 17 migraciones en D1 local
+npm run seed:admin -- tu@email.com "Tu Nombre"
+npm run dev                     # http://localhost:4321
+# En dev, el magic link se imprime en consola (no manda email)
 ```
+
+Listo. Si los pasos pasan, estás trabajando.
 
 ---
 
-## 4. Setup local opcional (para probar antes de deployar)
+## 4 — Workflow de cambios
 
 ```bash
-# Si no tienes D1 local todavía:
-npm run db:migrate:local
-
-# Seed admin local con tu email:
-npm run seed:admin -- pradofox@sopadeletras.art "Roberto Prado"
-
-# Arranca dev server:
-npm run dev
-# http://localhost:4321
-# Login: en consola del server sale el magic link (no usa Resend en dev por default)
+git pull --rebase                       # 1. Lo último
+claude                                   # 2. Edita con Claude Code (lee CLAUDE.md primero)
+npm run dev                              # 3. Prueba local
+npm run build                            # 4. Verifica que compile
+npm run deploy                           # 5. Deploy a producción
+git add -A && git commit -m "feat: ..." # 6. Versiona
+git push                                 # 7. Sube a GitHub
 ```
 
----
-
-## 5. Workflow típico de cambios
-
+Para cambios de schema:
 ```bash
-# 1. Pull lo último
-git pull --rebase
-
-# 2. Cambia código (con Claude Code te ayuda)
-claude
-# Le dices qué cambio quieres. Claude lee CLAUDE.md y demás docs primero.
-
-# 3. Prueba local
-npm run dev
-
-# 4. Build (verifica que compile sin errores)
-npm run build
-
-# 5. Deploy a producción
-npm run deploy
-
-# 6. Commit + push (esto NO redeploya, ya deployó arriba; pero es para versionar)
-git add -A
-git commit -m "feat: descripción del cambio"
-git push
-```
-
-Si haces cambio de schema (nueva migración):
-```bash
-# Crea migrations/00XX_descripcion.sql con CREATE/ALTER
-# Aplica local
+# crea migrations/00XX_descripcion.sql con CREATE/ALTER
 npm run db:migrate:local
-# Aplica remoto
 npm run db:migrate:prod
-# Después deploy
 npm run deploy
 ```
 
-**NUNCA edites migraciones viejas**, solo crea nuevas. SQLite no acepta ALTER de CHECK constraints.
+⚠️ NUNCA editar migraciones viejas. SQLite no acepta ALTER de CHECK constraints. Solo crea nuevas.
 
 ---
 
-## 6. Comandos útiles cheatsheet
+## 5 — Comandos útiles
 
-```bash
-# Listar usuarios
-npx wrangler d1 execute fc-admin --remote --command="SELECT email, nombre, rol FROM users"
-
-# Generar token manual de login (cuando Resend no llega)
-node -e "
-const { randomBytes } = require('crypto');
-const a = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-const t = Array.from(randomBytes(32)).map(b => a[b % a.length]).join('');
-console.log(t);
-"
-# Después insertarlo en auth_tokens con expires_at = Date.now() + 3600000
-
-# Ver logs en vivo de producción
-npx wrangler tail admin-fcagency
-
-# Rollback a versión anterior (si rompes algo)
-npx wrangler rollback admin-fcagency
-
-# Ver versiones
-npx wrangler deployments list
-```
-
----
-
-## 7. Documentación dentro del repo
-
-Lee estos en orden cuando llegues:
-1. `README.md` — overview
-2. `CLAUDE.md` — convenciones para Claude Code (idioma, estética, stack)
-3. `PRODUCCION.md` — estado vivo (URL, IDs, datos en prod)
-4. `PLAN.md` — fases del proyecto y roadmap
-5. `ARQUITECTURA.md` — modelo de datos y decisiones técnicas
-6. `DESCUBRIMIENTOS.md` — análisis del comportamiento real de las 4 plataformas viejas
-7. `PREGUNTAS-FELY.md` — decisiones pendientes con la dueña
-8. **Este `HANDOFF.md`** — setup desde cero
-
----
-
-## 8. Cuentas y URLs importantes
-
-| Cosa | URL / valor |
+| Comando | Qué hace |
 |---|---|
-| Producción | https://admin.fcagency.mx (alt: admin-fcagency.contacto-4c8.workers.dev) |
-| Repo GitHub | https://github.com/pradofox/admin-fcagency |
-| Cloudflare cuenta principal | `pradofox@sopadeletras.art` |
-| Cloudflare cuenta FC Agency | `Contacto@fcagency.mx` (account_id `e4c8b06f...`) |
-| D1 database id | `f77ab0bc-02ef-42ed-b628-62eb21d8f0a4` |
-| Resend dashboard | https://resend.com (login con cuenta FC) |
-| Firebase fc-agency consola | https://console.firebase.google.com |
-| Squarespace domain | fcagency.mx |
+| `npm run dev` | Servidor local |
+| `npm run build` | Build de producción a `./dist` |
+| `npm run deploy` | Build + deploy a CF |
+| `npm run db:migrate:local` | Aplica migraciones a D1 local |
+| `npm run db:migrate:prod` | Aplica migraciones a D1 producción |
+| `npm run seed:admin -- email "Nombre"` | Crea/actualiza admin |
+| `npm run users` | Lista usuarios remotos |
+| `npm run magic -- email [horas]` | Genera magic link manual y lo inserta en D1 |
+| `npm run logs` | Tail en vivo de producción |
+| `npm run rollback` | Rollback a versión anterior |
+| `npm run migrate:firebase` | Re-genera SQL desde Firebase (no aplicar sin revisar) |
 
 ---
 
-## 9. Troubleshooting común
+## 6 — Convenciones (no negociables)
 
-**Build falla con error TS:**
-```bash
-npm run build 2>&1 | grep -i error | head -20
+- **Idioma:** español México en toda la UI y mensajes.
+- **Estética:** paleta monocromática `#080808` → grises → `#FFFFFF`. Acento = blanco puro, NO color. Inter para todo + JetBrains Mono para datos tabulares.
+- **Fechas:** ISO `YYYY-MM-DD` siempre.
+- **IDs:** nanoid 16 chars para entidades, 32 para tokens.
+- **XSS:** confía en el escape default de Astro `{}`. Nunca `set:html` con datos de usuario.
+- **Stack:** NO migrar de stack. NO meter React/Vue/Tailwind.
+- **Roles:** `admin` (todo), `editor` (escribe), `viewer` (solo lee). Hide buttons via `canEdit(user)`.
+- **Sin escribir documentación nueva** sin pedirlo. Edita las existentes.
+
+---
+
+## 7 — Estructura del repo
+
 ```
-Si es por tipos D1, regenera tipos:
-```bash
-npx wrangler types
+admin-fcagency/
+├── HANDOFF.md          ← este archivo
+├── CLAUDE.md           ← contexto rápido para Claude Code
+├── README.md           ← presentación general
+├── PRODUCCION.md       ← estado vivo: URL, IDs, datos
+├── PLAN.md             ← roadmap por fases
+├── ARQUITECTURA.md     ← decisiones técnicas + diagrama
+├── DESCUBRIMIENTOS.md  ← análisis de las 4 plataformas viejas
+├── PREGUNTAS-FELY.md   ← decisiones pendientes con la dueña
+├── migrations/         ← schema versionado (NUNCA editar viejos, solo agregar)
+├── public/             ← favicon, apple-touch-icon, .assetsignore
+├── scripts/
+│   ├── seed-admin.mjs
+│   ├── magic-link.mjs
+│   └── migrate-from-firebase.mjs
+├── src/
+│   ├── env.d.ts        ← tipos D1, Runtime, SessionUser
+│   ├── middleware.ts   ← valida sesión cada request
+│   ├── lib/
+│   │   ├── auth.ts     ← tokens, sesiones, cookies
+│   │   ├── db.ts       ← helper getDB()
+│   │   ├── email.ts    ← magic link via Resend
+│   │   ├── session.ts  ← getUser, requireUser, requireAdmin, canEdit
+│   │   ├── ids.ts      ← nanoid helpers
+│   │   └── crm-pasos.ts ← catálogo de pasos por tipo de contacto
+│   ├── components/     ← Layout, Sidebar, Header, EmptyState, NotasTimeline, *Card, *Form
+│   ├── pages/          ← rutas (.astro + .ts api)
+│   └── styles/global.css
+├── wrangler.toml       ← bindings D1, vars, routes custom domain
+├── astro.config.mjs
+├── package.json
+└── tsconfig.json
 ```
 
-**Deploy falla con "no subdomain":**
-Ya está activado workers.dev en la cuenta FC. Si lo desactivaron, ir a https://dash.cloudflare.com/e4c8b06fcae74500b3b9c17a350953f4/workers/onboarding y registrar.
-
-**D1 con `BEGIN TRANSACTION` error:**
-D1 no acepta transacciones SQL directas en `wrangler d1 execute`. Quita esas líneas del SQL antes de aplicar.
-
-**Magic link no llega por Resend:**
-- Revisa Resend dashboard → Logs
-- Verifica que el secret `RESEND_API_KEY` esté en wrangler:
-  ```bash
-  npx wrangler secret list
-  ```
-- Como fallback: genera token manual y métele a `auth_tokens` directo en D1.
-
-**Migración con CHECK constraint falla:**
-Los valores del SQL no encajan con los CHECK del schema. Limpiar/normalizar antes de aplicar.
-
-**Cambios al deployar no aparecen:**
-Hay cache de CF. Force refresh con Cmd+Shift+R. Si persiste, espera 1-2 min.
-
 ---
 
-## 10. Si pierdes acceso a wrangler/CF
+## 8 — Troubleshooting frecuente
 
-Es probable que necesites re-loguear desde la Mac nueva:
+### Magic link no llega por Resend
+- Revisa spam.
+- Verifica que `RESEND_API_KEY` esté como secret: `npx wrangler secret list`
+- Fallback: `npm run magic -- email@x 1` genera un link manual válido 1 hora.
+
+### Build falla con error TS
 ```bash
-npx wrangler logout
-npx wrangler login
-# Abre browser, autoriza con tu cuenta personal
-# Esto te da acceso a tu cuenta y a las cuentas donde eres Member
+npx wrangler types  # regenera tipos D1
+npm run build
 ```
 
-Si Fely te quita de Members de la cuenta FC Agency, pierdes deploy/D1 access. Las plataformas siguen funcionando pero no puedes mantenerlas. Háblalo con ella antes.
+### Deploy con `BEGIN TRANSACTION` error
+D1 no acepta transacciones SQL directas. Quita esas líneas del SQL antes de `wrangler d1 execute`.
+
+### Migración con CHECK constraint falla
+Los datos del SQL no encajan con los CHECK del schema. Normaliza antes de aplicar.
+
+### Cambios no se ven después de deploy
+Cache CF. `Cmd+Shift+R` en browser. Si persiste, espera 1-2 min.
+
+### Custom domain "no route"
+- Verifica `wrangler.toml` tiene la sección `routes` con `custom_domain = true`.
+- En CF dashboard > Workers > admin-fcagency > Domains, verifica que `admin.fcagency.mx` esté Active.
+
+### Pierdo acceso a CF de FC Agency
+- Si Fely te quita de Members: `npx wrangler logout && npx wrangler login` con tu cuenta personal. Sigues con acceso a tu cuenta.
+- Si Fely no te ha agregado de vuelta: el deploy y migraciones fallan, pero el sitio sigue vivo (lo opera CF). Pide reinvitación.
+
+### El sitio responde pero D1 da error "binding DB not available"
+Local sin database_id en wrangler.toml o D1 no creada. Para producción: la D1 ya existe con id `f77ab0bc-02ef-42ed-b628-62eb21d8f0a4`.
 
 ---
 
-## 11. Para Fely (handoff a futuro)
+## 9 — Cómo Claude Code en la Mac de Fely usa esto
 
-Cuando ella quiera operar todo sin Roberto:
-1. En su cuenta CF (la que ya tiene): Members → quitar a pradofox
-2. Le pasa el repo: `gh repo transfer pradofox/admin-fcagency FC-Agency`
-3. Ella instala Claude Code en su Mac (ver `handoff-fely-claude-code.md`)
-4. Le pasa estas credenciales para Wrangler/D1: ya tiene todo en su cuenta CF
-5. Puede pedir admin role para su user en la plataforma y desactivar el de Roberto
+Ella ya tiene Claude Code instalado (ver `handoff-fely-claude-code.md` en `claude-code-general`). Para que su Claude entienda el proyecto:
+
+1. **Una vez:** ella le pasa esta URL en cualquier sesión:
+   ```
+   https://raw.githubusercontent.com/pradofox/admin-fcagency/main/HANDOFF.md
+   ```
+   Y le dice "lee este handoff y ten contexto del proyecto".
+
+2. **Cuando empiece a editar:** ella corre `gh repo clone pradofox/admin-fcagency`, luego `npm install`, luego `claude` en esa carpeta. El `CLAUDE.md` se carga automático.
+
+3. **Si necesita auth con Wrangler:** ella corre `npx wrangler login` con su cuenta de FC, ya es Member directo de la org de CF.
 
 ---
 
-## Checklist final desde cero
+## 10 — URLs y accesos importantes
 
-- [ ] Brew + Node + git + gh + VS Code + Claude Code instalados
-- [ ] gh logueado como pradofox
-- [ ] claude logueado
-- [ ] Repo clonado en `~/Code/admin-fcagency`
-- [ ] `npm install` sin errores
-- [ ] `npx wrangler whoami` muestra ambas cuentas
-- [ ] `npx wrangler d1 execute fc-admin --remote --command="SELECT 1"` responde
-- [ ] `npm run build` compila sin errores
-- [ ] Abro https://admin-fcagency.contacto-4c8.workers.dev y puedo loguearme
+| Cosa | URL |
+|---|---|
+| Producción | https://admin.fcagency.mx |
+| Fallback workers.dev | https://admin-fcagency.contacto-4c8.workers.dev |
+| Repo | https://github.com/pradofox/admin-fcagency |
+| Raw HANDOFF (este doc) | https://raw.githubusercontent.com/pradofox/admin-fcagency/main/HANDOFF.md |
+| Raw CLAUDE.md | https://raw.githubusercontent.com/pradofox/admin-fcagency/main/CLAUDE.md |
+| CF dashboard cuenta FC | https://dash.cloudflare.com/e4c8b06fcae74500b3b9c17a350953f4 |
+| Resend dashboard | https://resend.com/emails |
+| Squarespace registrar | https://account.squarespace.com |
+| Firebase legacy | https://console.firebase.google.com |
 
-Si todos los checks pasan, estás listo. Caso contrario, revisa la sección 9.
+---
+
+## 11 — Cuando esto termine y Fely opere todo
+
+1. Fely va a CF > Manage Account > Members → quita a `pradofox@sopadeletras.art`
+2. Transfer repo: `gh repo transfer pradofox/admin-fcagency FC-Agency`
+3. Las 4 plataformas viejas Netlify ya pueden apagarse (redirect 301 a admin.fcagency.mx primero)
+4. Firebase RTDB se queda como backup leído 30 días, después se apaga
+
+---
+
+## 12 — QA pasado al 2026-05-28
+
+Ruta `/` `/login` `/dashboard` `/modelos` `/producciones` `/castings` `/briefs` `/contenido` `/contactos` `/clientes` `/pagos` `/calendario` `/admin` `/admin/duplicados` `/perfil` + detail pages + forms `/nuevo` + búsquedas + exports CSV + notas timeline POST/DELETE + API search + SSL custom domain → **18+ rutas verificadas, todas 200 OK**.
+
+Si encuentras un 500 o 404 inesperado, revisa los logs:
+```bash
+npm run logs
+```
