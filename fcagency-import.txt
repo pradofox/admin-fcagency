@@ -1,6 +1,0 @@
-producciones 14400 IN CNAME fcagency-produ.netlify.app.
-brand 14400 IN CNAME fcagency-brand-content.netlify.app.
-modelos 14400 IN CNAME fcagency-modeloperation.netlify.app.
-community 14400 IN CNAME fcagency-communitym.netlify.app.
-coco 14400 IN CNAME crmc-fcagency.netlify.app.
-subdomain-owner-verification 14400 IN TXT "dd949a46ca4a15ca91d13c47cbbff929"
