@@ -9,42 +9,79 @@ const user = requireUser(Astro);
 const db = getDB(Astro);
 
 const filtroEstado = Astro.url.searchParams.get('estado') ?? 'todas';
+const filtroFlag = Astro.url.searchParams.get('flag') ?? '';
+const filtroCliente = Astro.url.searchParams.get('cliente') ?? '';
+const filtroTipo = Astro.url.searchParams.get('tipo') ?? '';
 const filtros = ['todas', 'planeacion', 'confirmada', 'en_curso', 'completada'];
+const flags = [
+  { v: '', label: 'todas' },
+  { v: 'pago_cliente_pendiente', label: 'cliente por pagar' },
+  { v: 'pago_modelo_pendiente', label: 'modelos por pagar' },
+  { v: 'material_pendiente', label: 'material pendiente' },
+  { v: 'retro_pendiente', label: 'retro pendiente' },
+  { v: 'cerradas', label: 'cerradas' },
+];
 const search = (Astro.url.searchParams.get('q') ?? '').trim();
 
-let results: any[] = [];
+const baseSelect = `SELECT p.id, p.titulo, p.marca_id, p.fecha_inicio, p.estado, p.ubicacion_shoot,
+                            p.tipo_produccion, p.cliente_id, p.proximo_paso, p.fecha_proxima_accion,
+                            p.pago_cliente_estado, p.pago_modelo_estado, p.material_recibido, p.retro_enviada,
+                            c.nombre as cliente_nombre,
+                            (SELECT SUM(lp.cobro_cliente) FROM lineas_produccion lp WHERE lp.produccion_id = p.id) as total_cobro
+                     FROM producciones p
+                     LEFT JOIN clientes c ON c.id = p.cliente_id`;
+
+let where: string[] = [];
+let binds: any[] = [];
 
 if (search) {
   const like = `%${search}%`;
-  const r = await db
-    .prepare(
-      `SELECT p.id, p.titulo, p.marca_id, p.fecha_inicio, p.estado, p.ubicacion_shoot,
-              (SELECT SUM(lp.cobro_cliente) FROM lineas_produccion lp WHERE lp.produccion_id = p.id) as total_cobro
-       FROM producciones p
-       WHERE p.titulo LIKE ? OR p.ubicacion_shoot LIKE ? OR p.notas LIKE ?
-       ORDER BY p.fecha_inicio DESC LIMIT 200`
-    )
-    .bind(like, like, like)
-    .all<any>();
-  results = r.results ?? [];
-} else {
-  const sql =
-    filtroEstado === 'todas'
-      ? `SELECT p.id, p.titulo, p.marca_id, p.fecha_inicio, p.estado, p.ubicacion_shoot,
-                (SELECT SUM(lp.cobro_cliente) FROM lineas_produccion lp WHERE lp.produccion_id = p.id) as total_cobro
-         FROM producciones p
-         ORDER BY p.fecha_inicio DESC, p.created_at DESC LIMIT 200`
-      : `SELECT p.id, p.titulo, p.marca_id, p.fecha_inicio, p.estado, p.ubicacion_shoot,
-                (SELECT SUM(lp.cobro_cliente) FROM lineas_produccion lp WHERE lp.produccion_id = p.id) as total_cobro
-         FROM producciones p
-         WHERE p.estado = ?
-         ORDER BY p.fecha_inicio DESC, p.created_at DESC LIMIT 200`;
-  const stmt = filtroEstado === 'todas' ? db.prepare(sql) : db.prepare(sql).bind(filtroEstado);
-  const r = await stmt.all<any>();
-  results = r.results ?? [];
+  where.push('(p.titulo LIKE ? OR p.ubicacion_shoot LIKE ? OR p.notas LIKE ? OR p.proximo_paso LIKE ? OR p.material_pendiente LIKE ? OR c.nombre LIKE ?)');
+  binds.push(like, like, like, like, like, like);
 }
+if (filtroEstado !== 'todas') {
+  where.push('p.estado = ?');
+  binds.push(filtroEstado);
+}
+if (filtroCliente) {
+  where.push('p.cliente_id = ?');
+  binds.push(filtroCliente);
+}
+if (filtroTipo) {
+  where.push('p.tipo_produccion = ?');
+  binds.push(filtroTipo);
+}
+if (filtroFlag === 'pago_cliente_pendiente') where.push("(p.pago_cliente_estado IS NULL OR p.pago_cliente_estado IN ('pendiente','anticipo_recibido'))");
+if (filtroFlag === 'pago_modelo_pendiente') where.push("(p.pago_modelo_estado IS NULL OR p.pago_modelo_estado = 'por_pagar')");
+if (filtroFlag === 'material_pendiente') where.push('(p.material_recibido = 0 OR p.material_pendiente IS NOT NULL)');
+if (filtroFlag === 'retro_pendiente') where.push('p.retro_enviada = 0');
+if (filtroFlag === 'cerradas') where.push("p.estado IN ('completada','cancelada')");
+
+const sql = `${baseSelect}${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY p.fecha_inicio DESC, p.created_at DESC LIMIT 200`;
+const stmt = binds.length ? db.prepare(sql).bind(...binds) : db.prepare(sql);
+const r = await stmt.all<any>();
+const results = r.results ?? [];
 
 const totalProds = (await db.prepare('SELECT COUNT(*) as c FROM producciones').first<{ c: number }>())?.c ?? 0;
+
+const clientes = (await db.prepare('SELECT id, nombre FROM clientes ORDER BY nombre').all<{ id: string; nombre: string }>()).results ?? [];
+const tiposRow = (await db.prepare("SELECT DISTINCT tipo_produccion as t FROM producciones WHERE tipo_produccion IS NOT NULL AND tipo_produccion <> '' ORDER BY tipo_produccion").all<{ t: string }>()).results ?? [];
+const tipos = tiposRow.map(x => x.t);
+
+function buildHref(overrides: Record<string,string>) {
+  const params = new URLSearchParams();
+  if (search) params.set('q', search);
+  if (filtroEstado && filtroEstado !== 'todas') params.set('estado', filtroEstado);
+  if (filtroFlag) params.set('flag', filtroFlag);
+  if (filtroCliente) params.set('cliente', filtroCliente);
+  if (filtroTipo) params.set('tipo', filtroTipo);
+  for (const k in overrides) {
+    if (overrides[k]) params.set(k, overrides[k]);
+    else params.delete(k);
+  }
+  const s = params.toString();
+  return `/producciones${s ? '?' + s : ''}`;
+}
 ---
 
 <Layout title="Producciones" pageTitle="Producciones">
@@ -54,24 +91,45 @@ const totalProds = (await db.prepare('SELECT COUNT(*) as c FROM producciones').f
   </div>
 
   <form method="GET" action="/producciones" class="toolbar">
-    <input class="input" type="search" name="q" value={search} placeholder="Buscar por título, ubicación, notas…" />
+    <input class="input" type="search" name="q" value={search} placeholder="Buscar por título, ubicación, notas, próximo paso, material, cliente…" />
+    {filtroEstado !== 'todas' && <input type="hidden" name="estado" value={filtroEstado} />}
+    {filtroFlag && <input type="hidden" name="flag" value={filtroFlag} />}
+    {filtroCliente && <input type="hidden" name="cliente" value={filtroCliente} />}
+    {filtroTipo && <input type="hidden" name="tipo" value={filtroTipo} />}
   </form>
 
-  {!search && (
-    <div class="filters">
-      {filtros.map((f) => (
-        <a href={`/producciones?estado=${f}`} class={`filter-chip ${filtroEstado === f ? 'active' : ''}`}>
-          {f.replace('_', ' ')}
-        </a>
-      ))}
-    </div>
-  )}
+  <div class="filters">
+    {filtros.map((f) => (
+      <a href={buildHref({ estado: f === 'todas' ? '' : f })} class={`filter-chip ${filtroEstado === f ? 'active' : ''}`}>
+        {f.replace('_', ' ')}
+      </a>
+    ))}
+  </div>
 
-  {search && (
-    <p class="text-muted" style="font-size:12px;margin-bottom:16px">
-      Buscando "{search}" — {results.length}. <a href="/producciones">Limpiar</a>
-    </p>
-  )}
+  <div class="filters" style="margin-top:8px">
+    {flags.map((f) => (
+      <a href={buildHref({ flag: f.v })} class={`filter-chip ${filtroFlag === f.v ? 'active' : ''}`}>{f.label}</a>
+    ))}
+  </div>
+
+  <div class="filters" style="margin-top:8px;gap:10px">
+    <form method="GET" action="/producciones" style="display:inline-flex;gap:8px;align-items:center">
+      {search && <input type="hidden" name="q" value={search} />}
+      {filtroEstado !== 'todas' && <input type="hidden" name="estado" value={filtroEstado} />}
+      {filtroFlag && <input type="hidden" name="flag" value={filtroFlag} />}
+      <select class="select" name="cliente" onchange="this.form.submit()" style="font-size:12px;min-width:160px">
+        <option value="">— cliente —</option>
+        {clientes.map((c) => <option value={c.id} selected={filtroCliente === c.id}>{c.nombre}</option>)}
+      </select>
+      <select class="select" name="tipo" onchange="this.form.submit()" style="font-size:12px;min-width:140px">
+        <option value="">— tipo —</option>
+        {tipos.map((t) => <option value={t} selected={filtroTipo === t}>{t}</option>)}
+      </select>
+    </form>
+    {(filtroCliente || filtroTipo || filtroFlag || filtroEstado !== 'todas' || search) && (
+      <a href="/producciones" class="filter-chip">limpiar todo</a>
+    )}
+  </div>
 
   {results.length > 0 ? (
     <div class="grid">
@@ -80,7 +138,7 @@ const totalProds = (await db.prepare('SELECT COUNT(*) as c FROM producciones').f
   ) : (
     <EmptyState
       title={search ? 'Sin resultados' : 'Sin producciones'}
-      message={search ? `Nada coincide con "${search}".` : 'No hay producciones en este filtro.'}
+      message={search ? `Nada coincide con "${search}".` : 'No hay producciones con esos filtros.'}
     />
   )}
 </Layout>

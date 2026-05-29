@@ -1,4 +1,6 @@
 ---
+import { formatFecha } from '../../lib/fechas';
+
 interface Props {
   produccion: {
     id: string;
@@ -8,6 +10,14 @@ interface Props {
     estado: string;
     ubicacion_shoot?: string | null;
     total_cobro?: number | null;
+    tipo_produccion?: string | null;
+    cliente_nombre?: string | null;
+    proximo_paso?: string | null;
+    fecha_proxima_accion?: string | null;
+    pago_cliente_estado?: string | null;
+    pago_modelo_estado?: string | null;
+    material_recibido?: number | null;
+    retro_enviada?: number | null;
   };
 }
 const { produccion } = Astro.props;
@@ -22,6 +32,11 @@ const chipClass: Record<string, string> = {
 
 const fmt = (n?: number | null) =>
   n ? `$${Math.round(n).toLocaleString('es-MX')} MXN` : '';
+
+const pagoClientePendiente = !produccion.pago_cliente_estado || ['pendiente','anticipo_recibido'].includes(produccion.pago_cliente_estado);
+const pagoModeloPendiente = !produccion.pago_modelo_estado || produccion.pago_modelo_estado === 'por_pagar';
+const materialPendiente = !produccion.material_recibido;
+const retroPendiente = !produccion.retro_enviada;
 ---
 
 <a href={`/producciones/${produccion.id}`} style="display:block;color:inherit;text-decoration:none">
@@ -29,10 +44,25 @@ const fmt = (n?: number | null) =>
     <div class="card-title">{produccion.titulo}</div>
     <div class="card-meta">
       <span class={`chip ${chipClass[produccion.estado] ?? ''}`}>{produccion.estado.replace('_', ' ')}</span>
-      {produccion.marca_id && <span>{produccion.marca_id}</span>}
-      {produccion.fecha_inicio && <span>{produccion.fecha_inicio}</span>}
-      {produccion.ubicacion_shoot && <span>{produccion.ubicacion_shoot}</span>}
+      {produccion.tipo_produccion && <span class="chip">{produccion.tipo_produccion}</span>}
+      {produccion.cliente_nombre && <span>{produccion.cliente_nombre}</span>}
+      {produccion.fecha_inicio && <span class="mono">{formatFecha(produccion.fecha_inicio)}</span>}
+      {produccion.ubicacion_shoot && <span class="text-muted">{produccion.ubicacion_shoot}</span>}
       {produccion.total_cobro && <span class="text-muted">{fmt(produccion.total_cobro)}</span>}
     </div>
+    {(produccion.fecha_proxima_accion || produccion.proximo_paso) && (
+      <div class="card-meta" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
+        {produccion.fecha_proxima_accion && <span class="mono" style="color:var(--gold)">{formatFecha(produccion.fecha_proxima_accion)}</span>}
+        {produccion.proximo_paso && <span class="text-muted">{produccion.proximo_paso}</span>}
+      </div>
+    )}
+    {(pagoClientePendiente || pagoModeloPendiente || materialPendiente || retroPendiente) && (
+      <div class="card-meta" style="margin-top:8px">
+        {pagoClientePendiente && <span class="chip chip-warning" style="font-size:10px">cliente $</span>}
+        {pagoModeloPendiente && <span class="chip chip-warning" style="font-size:10px">modelos $</span>}
+        {materialPendiente && <span class="chip chip-warning" style="font-size:10px">material</span>}
+        {retroPendiente && <span class="chip chip-warning" style="font-size:10px">retro</span>}
+      </div>
+    )}
   </article>
 </a>

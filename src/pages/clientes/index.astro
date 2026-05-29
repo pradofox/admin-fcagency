@@ -19,6 +19,12 @@ if (Astro.request.method === 'POST' && editable) {
     await db.prepare('DELETE FROM clientes WHERE id = ?').bind(id).run();
     return Astro.redirect('/clientes');
   }
+  if (action === 'toggle_frecuente') {
+    const id = form.get('id') as string;
+    const current = form.get('current') === '1' ? 0 : 1;
+    await db.prepare('UPDATE clientes SET es_frecuente = ?, updated_at = ? WHERE id = ?').bind(current, now(), id).run();
+    return Astro.redirect(Astro.url.pathname + Astro.url.search);
+  }
   const nombre = (form.get('nombre') as string)?.trim();
   if (!nombre) {
     error = 'Nombre requerido.';
@@ -40,16 +46,17 @@ if (Astro.request.method === 'POST' && editable) {
   }
 }
 
-const { results: clientes } = await db
-  .prepare(
-    `SELECT c.id, c.nombre, c.email, c.whatsapp, c.empresa, c.marca_id,
-            (SELECT COUNT(*) FROM producciones p WHERE p.cliente_id = c.id) as total_producciones,
-            (SELECT SUM(lp.cobro_cliente) FROM lineas_produccion lp
-              JOIN producciones p ON p.id = lp.produccion_id WHERE p.cliente_id = c.id) as total_cobrado
-     FROM clientes c
-     ORDER BY c.nombre ASC LIMIT 300`
-  )
-  .all<any>();
+const filtroFrec = Astro.url.searchParams.get('filtro') === 'frecuentes';
+
+const sql = `SELECT c.id, c.nombre, c.email, c.whatsapp, c.empresa, c.marca_id, c.es_frecuente,
+                    (SELECT COUNT(*) FROM producciones p WHERE p.cliente_id = c.id) as total_producciones,
+                    (SELECT SUM(lp.cobro_cliente) FROM lineas_produccion lp
+                      JOIN producciones p ON p.id = lp.produccion_id WHERE p.cliente_id = c.id) as total_cobrado
+             FROM clientes c
+             ${filtroFrec ? 'WHERE c.es_frecuente = 1' : ''}
+             ORDER BY c.es_frecuente DESC, c.nombre ASC LIMIT 300`;
+
+const { results: clientes } = await db.prepare(sql).all<any>();
 
 const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<{ id: string; nombre: string }>()).results ?? [];
 
@@ -63,6 +70,11 @@ const fmt = (n: number | null) =>
   </div>
 
   {error && <p class="text-danger">{error}</p>}
+
+  <div class="filters" style="margin-bottom:16px">
+    <a href="/clientes" class={`filter-chip ${!filtroFrec ? 'active' : ''}`}>todos</a>
+    <a href="/clientes?filtro=frecuentes" class={`filter-chip ${filtroFrec ? 'active' : ''}`}>★ frecuentes</a>
+  </div>
 
   {editable && (
     <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:32px">
@@ -104,22 +116,35 @@ const fmt = (n: number | null) =>
   {clientes && clientes.length > 0 ? (
     <div class="grid">
       {clientes.map((c: any) => (
-        <article class="card">
-          <div class="card-title">{c.nombre}</div>
+        <article class="card" style={c.es_frecuente ? 'border-left:3px solid var(--gold)' : ''}>
+          <div class="card-title">
+            {c.es_frecuente ? <span style="color:var(--gold);margin-right:6px">★</span> : null}
+            {c.nombre}
+          </div>
           <div class="card-meta">
             {c.empresa && <span class="chip">{c.empresa}</span>}
             {c.marca_id && <span>{c.marca_id}</span>}
             {c.email && <span class="text-muted">{c.email}</span>}
             {c.whatsapp && <span class="text-muted">{c.whatsapp}</span>}
           </div>
-          <div class="card-meta" style="margin-top:8px;border-top:1px solid var(--border);padding-top:10px">
+          <div class="card-meta" style="margin-top:8px;border-top:1px solid var(--border);padding-top:10px;align-items:center">
             <span><strong>{c.total_producciones ?? 0}</strong> <span class="text-muted">prods</span></span>
             <span style="color:var(--gold)"><strong>{fmt(c.total_cobrado)}</strong> <span class="text-muted">facturado</span></span>
+            {editable && (
+              <form method="POST" action="/clientes" style="display:inline;margin-left:auto">
+                <input type="hidden" name="_action" value="toggle_frecuente" />
+                <input type="hidden" name="id" value={c.id} />
+                <input type="hidden" name="current" value={c.es_frecuente ? '1' : '0'} />
+                <button type="submit" class={`btn btn-sm ${c.es_frecuente ? 'btn-primary' : ''}`} title={c.es_frecuente ? 'Quitar de frecuentes' : 'Marcar como frecuente'}>
+                  {c.es_frecuente ? '★ frecuente' : '☆ marcar frecuente'}
+                </button>
+              </form>
+            )}
           </div>
         </article>
       ))}
     </div>
   ) : (
-    <EmptyState title="Sin clientes" message="Aún no hay clientes capturados. Aparecerán aquí cuando los crees o cuando los asignes a producciones." />
+    <EmptyState title={filtroFrec ? 'Sin clientes frecuentes' : 'Sin clientes'} message={filtroFrec ? 'Marca un cliente como frecuente para verlo aquí.' : 'Aún no hay clientes capturados.'} />
   )}
 </Layout>

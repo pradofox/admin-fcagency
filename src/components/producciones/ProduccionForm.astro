@@ -15,6 +15,12 @@ interface Produccion {
   estado?: string;
   presupuesto?: number | null;
   notas?: string | null;
+  proximo_paso?: string | null;
+  fecha_proxima_accion?: string | null;
+  material_pendiente?: string | null;
+  equipo_involucrado?: string | null;
+  links_referencias?: string | null;
+  tipo_produccion?: string | null;
 }
 
 interface Props {
@@ -27,6 +33,11 @@ interface Props {
 }
 
 const { produccion = {}, marcas, clientes, action, submitLabel, isEdit = false } = Astro.props;
+
+const TIPOS_PRODUCCION = [
+  'Fotografía', 'Video', 'Campaña', 'Editorial', 'E-commerce',
+  'Lookbook', 'Evento', 'Booking', 'Fitting', 'Casting', 'Otro'
+];
 ---
 
 <form method="POST" action={action}>
@@ -34,6 +45,26 @@ const { produccion = {}, marcas, clientes, action, submitLabel, isEdit = false }
 
   <label class="label">Título *</label>
   <input class="input" name="titulo" value={produccion.titulo ?? ''} required />
+
+  <div class="row">
+    <div class="col">
+      <label class="label">Tipo de producción</label>
+      <select class="select" name="tipo_produccion">
+        <option value="">— sin asignar —</option>
+        {TIPOS_PRODUCCION.map((t) => (
+          <option value={t} selected={produccion.tipo_produccion === t}>{t}</option>
+        ))}
+      </select>
+    </div>
+    <div class="col">
+      <label class="label">Estado</label>
+      <select class="select" name="estado">
+        {['planeacion', 'confirmada', 'en_curso', 'completada', 'cancelada'].map((e) => (
+          <option value={e} selected={(produccion.estado ?? 'planeacion') === e}>{e.replace('_', ' ')}</option>
+        ))}
+      </select>
+    </div>
+  </div>
 
   <div class="row">
     <div class="col">
@@ -86,15 +117,28 @@ const { produccion = {}, marcas, clientes, action, submitLabel, isEdit = false }
     </div>
   </div>
 
-  <label class="label">Estado</label>
-  <select class="select" name="estado">
-    {['planeacion', 'confirmada', 'en_curso', 'completada', 'cancelada'].map((e) => (
-      <option value={e} selected={(produccion.estado ?? 'planeacion') === e}>{e.replace('_', ' ')}</option>
-    ))}
-  </select>
-
   <label class="label">Presupuesto MXN (opcional)</label>
   <input class="input" name="presupuesto" type="number" step="0.01" value={produccion.presupuesto ?? ''} />
+
+  <div class="row">
+    <div class="col">
+      <label class="label">Próxima acción — fecha</label>
+      <input class="input" type="date" name="fecha_proxima_accion" value={produccion.fecha_proxima_accion ?? ''} />
+    </div>
+    <div class="col">
+      <label class="label">Próxima acción — descripción</label>
+      <input class="input" name="proximo_paso" value={produccion.proximo_paso ?? ''} placeholder="Ej. Dar seguimiento al cliente" />
+    </div>
+  </div>
+
+  <label class="label">Equipo involucrado</label>
+  <input class="input" name="equipo_involucrado" value={produccion.equipo_involucrado ?? ''} placeholder="Foto: ___, Video: ___, MUA: ___" />
+
+  <label class="label">Material pendiente</label>
+  <textarea class="textarea" name="material_pendiente" placeholder="Qué falta entregar o producir">{produccion.material_pendiente ?? ''}</textarea>
+
+  <label class="label">Links / referencias</label>
+  <textarea class="textarea" name="links_referencias" placeholder="Drive, Pinterest, briefs, etc. Uno por línea.">{produccion.links_referencias ?? ''}</textarea>
 
   <label class="label">Notas</label>
   <textarea class="textarea" name="notas">{produccion.notas ?? ''}</textarea>

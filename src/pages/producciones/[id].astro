@@ -5,6 +5,7 @@ import NotasTimeline from '../../components/NotasTimeline.astro';
 import { requireUser, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
+import { formatFecha } from '../../lib/fechas';
 
 const user = requireUser(Astro);
 const editable = canEdit(user);
@@ -98,6 +99,16 @@ if (Astro.request.method === 'POST' && editable) {
     return Astro.redirect(`/producciones/${id}`);
   }
 
+  if (action === 'update_semaforo') {
+    const field = form.get('field') as string;
+    const value = form.get('value') as string;
+    const allowed = ['pago_cliente_estado', 'pago_modelo_estado', 'material_recibido', 'retro_enviada', 'estado'];
+    if (allowed.includes(field)) {
+      await db.prepare(`UPDATE producciones SET ${field} = ?, updated_at = ? WHERE id = ?`).bind(value, now(), id).run();
+    }
+    return Astro.redirect(`/producciones/${id}`);
+  }
+
   // Update producción
   const titulo = (form.get('titulo') as string)?.trim();
   if (!titulo) {
@@ -116,16 +127,20 @@ if (Astro.request.method === 'POST' && editable) {
     await db
       .prepare(
         `UPDATE producciones SET
-          titulo = ?, cliente_id = ?, marca_id = ?,
+          titulo = ?, cliente_id = ?, marca_id = ?, tipo_produccion = ?,
           fecha_inicio = ?, fecha_fin = ?, hora_inicio = ?, hora_fin = ?,
           ubicacion_mua = ?, ubicacion_shoot = ?, estado = ?,
-          presupuesto = ?, notas = ?, updated_at = ?
+          presupuesto = ?, notas = ?,
+          proximo_paso = ?, fecha_proxima_accion = ?, material_pendiente = ?,
+          equipo_involucrado = ?, links_referencias = ?,
+          updated_at = ?
         WHERE id = ?`
       )
       .bind(
         titulo,
         get('cliente_id'),
         get('marca_id'),
+        get('tipo_produccion'),
         get('fecha_inicio'),
         get('fecha_fin'),
         get('hora_inicio'),
@@ -135,6 +150,11 @@ if (Astro.request.method === 'POST' && editable) {
         get('estado') ?? 'planeacion',
         getNum('presupuesto'),
         get('notas'),
+        get('proximo_paso'),
+        get('fecha_proxima_accion'),
+        get('material_pendiente'),
+        get('equipo_involucrado'),
+        get('links_referencias'),
         now(),
         id
       )
@@ -200,6 +220,66 @@ const ROLES = [
     <div class="stat stat-ok">
       <div class="stat-value">{fmt(utilidad)}</div>
       <div class="stat-label">Utilidad</div>
+    </div>
+  </div>
+
+  {(prod.fecha_proxima_accion || prod.proximo_paso) && (
+    <div class="card" style="margin-bottom:24px;border-left:3px solid var(--gold)">
+      <div class="card-meta">Próxima acción</div>
+      <div style="display:flex;gap:16px;align-items:center;margin-top:6px">
+        {prod.fecha_proxima_accion && <span class="mono" style="color:var(--gold)">{formatFecha(prod.fecha_proxima_accion)}</span>}
+        {prod.proximo_paso && <span>{prod.proximo_paso}</span>}
+      </div>
+    </div>
+  )}
+
+  <h2>Estado de post-producción</h2>
+  <div class="row" style="margin-bottom:32px">
+    <div class="col card">
+      <div class="card-meta">Pago cliente</div>
+      <form method="POST" action={`/producciones/${id}`} style="margin-top:8px">
+        <input type="hidden" name="_action" value="update_semaforo" />
+        <input type="hidden" name="field" value="pago_cliente_estado" />
+        <select class="select" name="value" onchange="this.form.submit()" style="font-size:13px" disabled={!editable}>
+          {['pendiente', 'anticipo_recibido', 'pagado', 'no_aplica'].map((e) => (
+            <option value={e} selected={(prod.pago_cliente_estado ?? 'pendiente') === e}>{e.replace(/_/g, ' ')}</option>
+          ))}
+        </select>
+      </form>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Pago modelo</div>
+      <form method="POST" action={`/producciones/${id}`} style="margin-top:8px">
+        <input type="hidden" name="_action" value="update_semaforo" />
+        <input type="hidden" name="field" value="pago_modelo_estado" />
+        <select class="select" name="value" onchange="this.form.submit()" style="font-size:13px" disabled={!editable}>
+          {['por_pagar', 'pagado', 'no_aplica'].map((e) => (
+            <option value={e} selected={(prod.pago_modelo_estado ?? 'por_pagar') === e}>{e.replace(/_/g, ' ')}</option>
+          ))}
+        </select>
+      </form>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Material</div>
+      <form method="POST" action={`/producciones/${id}`} style="margin-top:8px">
+        <input type="hidden" name="_action" value="update_semaforo" />
+        <input type="hidden" name="field" value="material_recibido" />
+        <select class="select" name="value" onchange="this.form.submit()" style="font-size:13px" disabled={!editable}>
+          <option value="0" selected={!prod.material_recibido}>Pendiente</option>
+          <option value="1" selected={!!prod.material_recibido}>Recibido</option>
+        </select>
+      </form>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Retro</div>
+      <form method="POST" action={`/producciones/${id}`} style="margin-top:8px">
+        <input type="hidden" name="_action" value="update_semaforo" />
+        <input type="hidden" name="field" value="retro_enviada" />
+        <select class="select" name="value" onchange="this.form.submit()" style="font-size:13px" disabled={!editable}>
+          <option value="0" selected={!prod.retro_enviada}>Pendiente</option>
+          <option value="1" selected={!!prod.retro_enviada}>Enviada</option>
+        </select>
+      </form>
     </div>
   </div>
 
