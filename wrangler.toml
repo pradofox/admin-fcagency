@@ -5,11 +5,19 @@ compatibility_flags = ["nodejs_compat"]
 account_id = "e4c8b06fcae74500b3b9c17a350953f4"
 assets = { directory = "./dist", binding = "ASSETS" }
 
+# workers.dev URL (always available)
+workers_dev = true
+
+# Custom domain (requires fcagency.mx zone active in CF)
+routes = [
+  { pattern = "admin.fcagency.mx", custom_domain = true }
+]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "fc-admin"
 database_id = "f77ab0bc-02ef-42ed-b628-62eb21d8f0a4"
 
 [vars]
-APP_URL = "https://admin-fcagency.contacto-4c8.workers.dev"
+APP_URL = "https://admin.fcagency.mx"
 # RESEND_API_KEY se configura como secret en producción

@@ -1,9 +1,15 @@
 # Producción — Estado vivo
 
-## URL
-**https://admin-fcagency.contacto-4c8.workers.dev**
+## URL principal
+**https://admin.fcagency.mx** (custom domain en Cloudflare)
 
-Subdominio temporal de Cloudflare Workers. Migrable a `admin.fcagency.mx` cuando haya tiempo de configurar DNS en Squarespace.
+## URL alternativa
+**https://admin-fcagency.contacto-4c8.workers.dev** (workers.dev — fallback, sigue activo)
+
+## DNS
+- Zona `fcagency.mx` administrada en Cloudflare (cuenta FC Agency)
+- Squarespace solo registrar
+- Nameservers: `joyce.ns.cloudflare.com`, `melnicoff.ns.cloudflare.com`
 
 ## Cuenta Cloudflare
 - **Account:** `Contacto@fcagency.mx's Account` (cuenta de FC Agency, separada de la de Roberto)
@@ -78,3 +84,5 @@ Wrangler está logueado con cuenta `pradofox@sopadeletras.art` que tiene acceso 
 - **2026-05-28 15:50** — Resend API key configurada. APP_URL apuntando a producción.
 - **2026-05-28 15:55** — Migración de 370 filas desde Firebase a D1 producción.
 - **2026-05-28 16:00** — Seed admins: Roberto y Fely. Magic links disparados por Resend.
+- **2026-05-28 20:30** — Construcción intensiva: roles + admin + Clientes + Pagos + Calendario + búsqueda en Modelos/Producciones/Contactos + detalle Castings con AJAX picker + Modelos con historial + dashboard real + notas timeline + export CSV + detección de duplicados + perfil + HANDOFF.md.
+- **2026-05-28 21:00** — DNS de fcagency.mx migrado a Cloudflare (cuenta FC Agency). Custom domain `admin.fcagency.mx` configurado. APP_URL actualizado. Squarespace sigue como registrar.

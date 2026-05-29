@@ -2,9 +2,13 @@
 
 Plataforma admin unificada del Universo FC Agency. Reemplaza las 5 plataformas separadas con un solo sistema.
 
+**URL en vivo:** https://admin.fcagency.mx
+
 **Stack:** Astro + Cloudflare Workers + D1 + auth custom con magic link  
 **Estética:** dark mode #0E0E0E + dorados #C9A84C, Bebas Neue + DM Sans  
 **Idioma:** español México
+
+> Para setup desde otra Mac → ver `HANDOFF.md`
 
 ---
 

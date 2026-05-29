@@ -190,7 +190,7 @@ Lee estos en orden cuando llegues:
 
 | Cosa | URL / valor |
 |---|---|
-| Producción | https://admin-fcagency.contacto-4c8.workers.dev |
+| Producción | https://admin.fcagency.mx (alt: admin-fcagency.contacto-4c8.workers.dev) |
 | Repo GitHub | https://github.com/pradofox/admin-fcagency |
 | Cloudflare cuenta principal | `pradofox@sopadeletras.art` |
 | Cloudflare cuenta FC Agency | `Contacto@fcagency.mx` (account_id `e4c8b06f...`) |
