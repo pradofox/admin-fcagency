@@ -57,13 +57,21 @@ if (Astro.request.method === 'POST' && editable) {
 
   if (action === 'registrar_pago') {
     const membresiaId = form.get('membresia_id') as string;
-    const mem = await db.prepare('SELECT m.fecha_proximo_pago, p.duracion_dias FROM membresias_district m JOIN planes_district p ON p.id = m.plan_id WHERE m.id = ?').bind(membresiaId).first<any>();
+    const mem = await db.prepare('SELECT m.fecha_proximo_pago, m.precio_pactado_mxn, p.duracion_dias FROM membresias_district m JOIN planes_district p ON p.id = m.plan_id WHERE m.id = ?').bind(membresiaId).first<any>();
     if (mem) {
       const fp = new Date(mem.fecha_proximo_pago + 'T00:00:00Z');
       fp.setUTCDate(fp.getUTCDate() + mem.duracion_dias);
+      const ts = now();
+      const metodo = (form.get('metodo_pago') as string) || 'efectivo';
       await db
         .prepare("UPDATE membresias_district SET fecha_proximo_pago = ?, estado = 'activa', updated_at = ? WHERE id = ?")
-        .bind(fp.toISOString().slice(0, 10), now(), membresiaId)
+        .bind(fp.toISOString().slice(0, 10), ts, membresiaId)
+        .run();
+      // Registrar en historial de pagos
+      await db
+        .prepare(`INSERT INTO pagos_district (id, miembro_id, membresia_id, monto_mxn, fecha_pago, metodo, registrado_por, created_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(newId(), id, membresiaId, mem.precio_pactado_mxn ?? 0, new Date().toISOString().slice(0, 10), metodo, user.id, ts)
         .run();
     }
     return Astro.redirect(`/district/miembros/${id}`);
@@ -130,7 +138,10 @@ const { results: reservasMiembro } = await db
 
 <Layout title={miembro.nombre} pageTitle="District Studio">
   <div class="page-head">
-    <h1>{miembro.nombre}{!miembro.activo && <small class="text-muted" style="font-size:14px;margin-left:10px">inactivo</small>}</h1>
+    <div>
+      <h1 style="margin-bottom:2px">{miembro.nombre}{!miembro.activo && <small class="text-muted" style="font-size:14px;margin-left:10px">inactivo</small>}</h1>
+      {miembro.numero_membresia && <div class="mono" style="font-size:13px;color:var(--gold);letter-spacing:.1em">{miembro.numero_membresia}</div>}
+    </div>
     <div style="display:flex;gap:10px">
       <a href="/district/miembros" class="btn btn-sm">Volver</a>
       {editable && (
@@ -171,10 +182,15 @@ const { results: reservasMiembro } = await db
           <div class="mono" style="font-size:18px">${Math.round(membresiaActiva.precio_pactado_mxn ?? 0).toLocaleString('es-MX')}</div>
         </div>
         {editable && (
-          <div class="col" style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
-            <form method="POST" action={`/district/miembros/${id}`} style="display:inline">
+          <div class="col" style="display:flex;gap:6px;align-items:center;justify-content:flex-end;flex-wrap:wrap">
+            <form method="POST" action={`/district/miembros/${id}`} style="display:flex;gap:6px;align-items:center">
               <input type="hidden" name="_action" value="registrar_pago" />
               <input type="hidden" name="membresia_id" value={membresiaActiva.id} />
+              <select name="metodo_pago" class="select" style="width:auto;font-size:12px;padding:4px 8px">
+                <option value="efectivo">Efectivo</option>
+                <option value="transferencia">Transferencia</option>
+                <option value="tarjeta">Tarjeta</option>
+              </select>
               <button type="submit" class="btn btn-primary btn-sm">Registrar pago</button>
             </form>
             <form method="POST" action={`/district/miembros/${id}`} onsubmit="return confirm('¿Cancelar la membresía?')" style="display:inline">
@@ -190,33 +206,40 @@ const { results: reservasMiembro } = await db
     <p class="text-muted" style="margin-bottom:20px">Sin membresía activa.</p>
   )}
 
-  {editable && (planesDisponibles?.length ?? 0) > 0 && (
+  {editable && (
     <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:32px">
       <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Asignar / renovar membresía</summary>
-      <form method="POST" action={`/district/miembros/${id}`} style="margin-top:16px">
-        <input type="hidden" name="_action" value="add_membresia" />
-        <div class="row">
-          <div class="col">
-            <label class="label">Plan *</label>
-            <select class="select" name="plan_id" required>
-              <option value="">— elige plan —</option>
-              {planesDisponibles?.map((p: any) => (
-                <option value={p.id}>{p.nombre} (${Math.round(p.precio_mxn).toLocaleString('es-MX')} / {p.duracion_dias}d)</option>
-              ))}
-            </select>
+      {(planesDisponibles?.length ?? 0) === 0 ? (
+        <p style="margin-top:14px" class="text-muted">
+          Todavía no hay planes creados.{' '}
+          <a href="/district/planes" style="color:var(--gold)">Crear planes en District → Planes</a>
+        </p>
+      ) : (
+        <form method="POST" action={`/district/miembros/${id}`} style="margin-top:16px">
+          <input type="hidden" name="_action" value="add_membresia" />
+          <div class="row">
+            <div class="col">
+              <label class="label">Plan *</label>
+              <select class="select" name="plan_id" required>
+                <option value="">— elige plan —</option>
+                {planesDisponibles?.map((p: any) => (
+                  <option value={p.id}>{p.nombre} (${Math.round(p.precio_mxn).toLocaleString('es-MX')} / {p.duracion_dias}d)</option>
+                ))}
+              </select>
+            </div>
+            <div class="col">
+              <label class="label">Fecha inicio</label>
+              <input class="input" type="date" name="fecha_inicio" value={todayISO} />
+            </div>
+            <div class="col">
+              <label class="label">Precio pactado (opcional)</label>
+              <input class="input" type="number" step="0.01" name="precio_pactado_mxn" placeholder="usa precio del plan si vacío" />
+            </div>
           </div>
-          <div class="col">
-            <label class="label">Fecha inicio</label>
-            <input class="input" type="date" name="fecha_inicio" value={todayISO} />
-          </div>
-          <div class="col">
-            <label class="label">Precio pactado (opcional)</label>
-            <input class="input" type="number" step="0.01" name="precio_pactado_mxn" placeholder="usa precio del plan si vacío" />
-          </div>
-        </div>
-        <button type="submit" class="btn btn-primary" style="margin-top:14px">Asignar membresía</button>
-        <p class="text-muted" style="font-size:12px;margin-top:8px">Si ya tiene una membresía activa, se cierra y se reemplaza.</p>
-      </form>
+          <button type="submit" class="btn btn-primary" style="margin-top:14px">Asignar membresía</button>
+          <p class="text-muted" style="font-size:12px;margin-top:8px">Si ya tiene una membresía activa, se cierra y se reemplaza.</p>
+        </form>
+      )}
     </details>
   )}
 

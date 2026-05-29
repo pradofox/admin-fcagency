@@ -16,6 +16,8 @@ const HORA_CIERRE    = '21:00';
 const MAX_HOT_DESK   = 12;
 
 let error: string | null = null;
+let vencidaMiembroId: string | null = null;
+let vencidaNombre: string | null = null;
 
 if (Astro.request.method === 'POST' && editable) {
   const form  = await Astro.request.formData();
@@ -23,6 +25,7 @@ if (Astro.request.method === 'POST' && editable) {
   const horaInicio = (form.get('hora_inicio') as string)?.trim();
   const horaFin    = (form.get('hora_fin')    as string)?.trim();
   const espacio    = (form.get('espacio') as string) ?? 'hot_desk';
+  const miembroId  = (form.get('miembro_id') as string)?.trim() || null;
 
   if (!fecha || !horaInicio || !horaFin) {
     error = 'Fecha, hora inicio y hora fin son obligatorios.';
@@ -32,31 +35,50 @@ if (Astro.request.method === 'POST' && editable) {
     error = `Horario de cowork: ${HORA_APERTURA} a ${HORA_CIERRE} h, lunes a viernes.`;
   } else if (horaFin <= horaInicio) {
     error = 'La hora de fin debe ser posterior al inicio.';
-  } else if (espacio === 'sala_juntas') {
-    const conflict = await db
-      .prepare(
-        `SELECT id FROM reservas_cowork
-         WHERE fecha = ? AND espacio = 'sala_juntas'
-           AND hora_inicio < ? AND hora_fin > ?
-         LIMIT 1`
-      )
-      .bind(fecha, horaFin, horaInicio)
-      .first<any>();
-    if (conflict) {
-      error = 'La sala de juntas ya esta reservada en ese horario.';
+  } else {
+    // Verificar membresia del miembro si aplica
+    if (miembroId) {
+      const mem = await db
+        .prepare("SELECT id, fecha_proximo_pago FROM membresias_district WHERE miembro_id = ? AND estado = 'activa' LIMIT 1")
+        .bind(miembroId)
+        .first<any>();
+      if (!mem) {
+        const row = await db.prepare('SELECT nombre FROM miembros_district WHERE id = ?').bind(miembroId).first<any>();
+        error = `${row?.nombre ?? 'Este miembro'} no tiene membresía activa.`;
+      } else if (mem.fecha_proximo_pago < todayISO) {
+        const row = await db.prepare('SELECT nombre FROM miembros_district WHERE id = ?').bind(miembroId).first<any>();
+        vencidaMiembroId = miembroId;
+        vencidaNombre    = row?.nombre ?? 'El miembro';
+        error = `La membresía de ${vencidaNombre} está vencida.`;
+      }
     }
-  } else if (espacio === 'hot_desk') {
-    const row = await db
-      .prepare(
-        `SELECT COUNT(*) as cnt FROM reservas_cowork
-         WHERE fecha = ? AND espacio = 'hot_desk'
-           AND hora_inicio < ? AND hora_fin > ?`
-      )
-      .bind(fecha, horaFin, horaInicio)
-      .first<any>();
-    const ocupados = row?.cnt ?? 0;
-    if (ocupados >= MAX_HOT_DESK) {
-      error = `Aforo completo (${MAX_HOT_DESK}/${MAX_HOT_DESK} lugares en ese horario).`;
+
+    if (!error && espacio === 'sala_juntas') {
+      const conflict = await db
+        .prepare(
+          `SELECT id FROM reservas_cowork
+           WHERE fecha = ? AND espacio = 'sala_juntas'
+             AND hora_inicio < ? AND hora_fin > ?
+           LIMIT 1`
+        )
+        .bind(fecha, horaFin, horaInicio)
+        .first<any>();
+      if (conflict) {
+        error = 'La sala de juntas ya esta reservada en ese horario.';
+      }
+    } else if (!error && espacio === 'hot_desk') {
+      const row = await db
+        .prepare(
+          `SELECT COUNT(*) as cnt FROM reservas_cowork
+           WHERE fecha = ? AND espacio = 'hot_desk'
+             AND hora_inicio < ? AND hora_fin > ?`
+        )
+        .bind(fecha, horaFin, horaInicio)
+        .first<any>();
+      const ocupados = row?.cnt ?? 0;
+      if (ocupados >= MAX_HOT_DESK) {
+        error = `Aforo completo (${MAX_HOT_DESK}/${MAX_HOT_DESK} lugares en ese horario).`;
+      }
     }
   }
 
@@ -107,8 +129,15 @@ const sql = `SELECT r.id, r.fecha, r.hora_inicio, r.hora_fin, r.tipo, r.espacio,
 const { results: reservas } = await db.prepare(sql).bind(...binds).all<any>();
 
 const { results: miembros } = await db
-  .prepare("SELECT id, nombre FROM miembros_district WHERE activo = 1 ORDER BY nombre")
-  .all<{ id: string; nombre: string }>();
+  .prepare(
+    `SELECT mi.id, mi.nombre, mi.numero_membresia,
+            mb.fecha_proximo_pago as mem_vence
+     FROM miembros_district mi
+     LEFT JOIN membresias_district mb ON mb.miembro_id = mi.id AND mb.estado = 'activa'
+     WHERE mi.activo = 1
+     ORDER BY mi.nombre`
+  )
+  .all<any>();
 
 const TIPOS_COWORK = [
   { v: 'visita',            label: 'Visita' },
@@ -126,7 +155,16 @@ const TIPOS_COWORK = [
   </div>
   <DistrictNav />
 
-  {error && <p class="text-danger" style="margin-bottom:16px">{error}</p>}
+  {error && (
+    <div class="text-danger" style="margin-bottom:16px;padding:12px;border:1px solid var(--danger,#e25555);border-radius:4px">
+      {error}
+      {vencidaMiembroId && (
+        <span style="margin-left:12px">
+          <a href={`/district/miembros/${vencidaMiembroId}`} class="btn btn-sm btn-primary">Ir a pago de membresía</a>
+        </span>
+      )}
+    </div>
+  )}
 
   {editable && (
     <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:24px" open={!!error}>
@@ -167,10 +205,15 @@ const TIPOS_COWORK = [
         </div>
         <div class="row">
           <div class="col">
-            <label class="label">Miembro</label>
+            <label class="label">Miembro <small class="text-muted">(verifica membresía)</small></label>
             <select class="select" name="miembro_id">
               <option value="">— sin asignar —</option>
-              {miembros?.map((m) => <option value={m.id}>{m.nombre}</option>)}
+              {miembros?.map((m: any) => {
+                const vencida = m.mem_vence && m.mem_vence < todayISO;
+                const sinMem  = !m.mem_vence;
+                const label   = `${m.nombre}${m.numero_membresia ? ' (' + m.numero_membresia + ')' : ''}${vencida ? ' ⚠ VENCIDA' : sinMem ? ' — sin membresía' : ' ✓'}`;
+                return <option value={m.id}>{label}</option>;
+              })}
             </select>
           </div>
           <div class="col">

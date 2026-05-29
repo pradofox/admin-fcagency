@@ -1,0 +1,177 @@
+---
+import Layout from '../../../components/Layout.astro';
+import DistrictNav from '../../../components/DistrictNav.astro';
+import { requireUser } from '../../../lib/session';
+import { getDB } from '../../../lib/db';
+import { formatFecha } from '../../../lib/fechas';
+
+const user = requireUser(Astro);
+const db = getDB(Astro);
+
+const todayISO = new Date().toISOString().slice(0, 10);
+const en7d  = new Date(Date.now() + 7  * 864e5).toISOString().slice(0, 10);
+const en30d = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
+
+const filtro = Astro.url.searchParams.get('filtro') ?? 'pendientes';
+
+// --- Miembros con membresia activa o vencida ---
+const { results: miembrosConMembresia } = await db
+  .prepare(
+    `SELECT mi.id, mi.nombre, mi.numero_membresia, mi.whatsapp,
+            mb.id as mem_id, mb.fecha_proximo_pago, mb.precio_pactado_mxn, mb.estado as mem_estado,
+            p.nombre as plan_nombre
+     FROM miembros_district mi
+     JOIN membresias_district mb ON mb.miembro_id = mi.id AND mb.estado = 'activa'
+     JOIN planes_district p ON p.id = mb.plan_id
+     WHERE mi.activo = 1
+     ORDER BY mb.fecha_proximo_pago ASC`
+  )
+  .all<any>();
+
+const vencidos  = miembrosConMembresia?.filter((m: any) => m.fecha_proximo_pago <  todayISO) ?? [];
+const proximos7 = miembrosConMembresia?.filter((m: any) => m.fecha_proximo_pago >= todayISO && m.fecha_proximo_pago <= en7d) ?? [];
+const proximos30 = miembrosConMembresia?.filter((m: any) => m.fecha_proximo_pago > en7d && m.fecha_proximo_pago <= en30d) ?? [];
+
+// --- Historial de pagos ---
+const { results: historial } = await db
+  .prepare(
+    `SELECT pg.id, pg.fecha_pago, pg.monto_mxn, pg.metodo, pg.notas,
+            mi.nombre as miembro_nombre, mi.numero_membresia,
+            u.nombre as registrado_por_nombre
+     FROM pagos_district pg
+     JOIN miembros_district mi ON mi.id = pg.miembro_id
+     LEFT JOIN users u ON u.id = pg.registrado_por
+     ORDER BY pg.fecha_pago DESC, pg.created_at DESC
+     LIMIT 100`
+  )
+  .all<any>();
+
+const totalMes = historial
+  ?.filter((p: any) => p.fecha_pago?.slice(0, 7) === todayISO.slice(0, 7))
+  .reduce((sum: number, p: any) => sum + (p.monto_mxn ?? 0), 0) ?? 0;
+---
+
+<Layout title="Pagos District" pageTitle="District Studio">
+  <div class="page-head">
+    <h1>Pagos</h1>
+  </div>
+  <DistrictNav />
+
+  <div class="row" style="margin-bottom:24px">
+    <div class="col card">
+      <div class="card-meta">Vencidos</div>
+      <div class="card-title mono" style={vencidos.length > 0 ? 'color:var(--danger,#e25555)' : ''}>{vencidos.length}</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Vencen en 7 dias</div>
+      <div class="card-title mono" style={proximos7.length > 0 ? 'color:#e9b949' : ''}>{proximos7.length}</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Vencen en 30 dias</div>
+      <div class="card-title mono">{proximos30.length}</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Cobrado este mes</div>
+      <div class="card-title mono" style="color:var(--gold)">${Math.round(totalMes).toLocaleString('es-MX')}</div>
+    </div>
+  </div>
+
+  {vencidos.length > 0 && (
+    <div style="margin-bottom:32px">
+      <h2 style="color:var(--danger,#e25555);margin-bottom:12px">Vencidos ({vencidos.length})</h2>
+      <div class="table-card">
+        <table>
+          <thead>
+            <tr><th>Miembro</th><th>No.</th><th>Plan</th><th>Vencio</th><th class="right">Monto</th><th></th></tr>
+          </thead>
+          <tbody>
+            {vencidos.map((m: any) => (
+              <tr>
+                <td><a href={`/district/miembros/${m.id}`} style="color:inherit">{m.nombre}</a></td>
+                <td class="mono" style="color:var(--gold)">{m.numero_membresia ?? '—'}</td>
+                <td><small class="text-muted">{m.plan_nombre}</small></td>
+                <td class="mono" style="color:var(--danger,#e25555)">{formatFecha(m.fecha_proximo_pago)}</td>
+                <td class="right mono">${Math.round(m.precio_pactado_mxn ?? 0).toLocaleString('es-MX')}</td>
+                <td><a href={`/district/miembros/${m.id}`} class="btn btn-sm btn-primary">Registrar pago</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )}
+
+  {proximos7.length > 0 && (
+    <div style="margin-bottom:32px">
+      <h2 style="color:#e9b949;margin-bottom:12px">Vencen en 7 dias ({proximos7.length})</h2>
+      <div class="table-card">
+        <table>
+          <thead>
+            <tr><th>Miembro</th><th>No.</th><th>Plan</th><th>Vence</th><th class="right">Monto</th><th></th></tr>
+          </thead>
+          <tbody>
+            {proximos7.map((m: any) => (
+              <tr>
+                <td><a href={`/district/miembros/${m.id}`} style="color:inherit">{m.nombre}</a></td>
+                <td class="mono" style="color:var(--gold)">{m.numero_membresia ?? '—'}</td>
+                <td><small class="text-muted">{m.plan_nombre}</small></td>
+                <td class="mono" style="color:#e9b949">{formatFecha(m.fecha_proximo_pago)}</td>
+                <td class="right mono">${Math.round(m.precio_pactado_mxn ?? 0).toLocaleString('es-MX')}</td>
+                <td><a href={`/district/miembros/${m.id}`} class="btn btn-sm">Recordar pago</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )}
+
+  {proximos30.length > 0 && (
+    <div style="margin-bottom:32px">
+      <h2 style="margin-bottom:12px">Proximos 30 dias ({proximos30.length})</h2>
+      <div class="table-card">
+        <table>
+          <thead>
+            <tr><th>Miembro</th><th>No.</th><th>Plan</th><th>Vence</th><th class="right">Monto</th></tr>
+          </thead>
+          <tbody>
+            {proximos30.map((m: any) => (
+              <tr>
+                <td><a href={`/district/miembros/${m.id}`} style="color:inherit">{m.nombre}</a></td>
+                <td class="mono" style="color:var(--gold)">{m.numero_membresia ?? '—'}</td>
+                <td><small class="text-muted">{m.plan_nombre}</small></td>
+                <td class="mono">{formatFecha(m.fecha_proximo_pago)}</td>
+                <td class="right mono">${Math.round(m.precio_pactado_mxn ?? 0).toLocaleString('es-MX')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )}
+
+  <h2 style="margin-bottom:12px">Historial de pagos</h2>
+  {historial && historial.length > 0 ? (
+    <div class="table-card">
+      <table>
+        <thead>
+          <tr><th>Fecha</th><th>Miembro</th><th>No.</th><th>Metodo</th><th class="right">Monto</th><th>Registro</th></tr>
+        </thead>
+        <tbody>
+          {historial.map((p: any) => (
+            <tr>
+              <td class="mono">{formatFecha(p.fecha_pago)}</td>
+              <td><a href={`/district/miembros/${p.miembro_id ?? ''}`} style="color:inherit">{p.miembro_nombre}</a></td>
+              <td class="mono" style="color:var(--gold)">{p.numero_membresia ?? '—'}</td>
+              <td><span class="chip">{p.metodo ?? 'efectivo'}</span></td>
+              <td class="right mono" style="color:var(--gold)">${Math.round(p.monto_mxn ?? 0).toLocaleString('es-MX')}</td>
+              <td><small class="text-muted">{p.registrado_por_nombre ?? '—'}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  ) : (
+    <p class="text-muted">Sin pagos registrados todavia.</p>
+  )}
+</Layout>

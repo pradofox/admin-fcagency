@@ -21,14 +21,25 @@ if (Astro.request.method === 'POST') {
       const v = form.get(k);
       return v === null || v === '' ? null : String(v).trim();
     };
+    // Auto-generar número de membresía: DS-001, DS-002, ...
+    const lastRow = await db
+      .prepare("SELECT numero_membresia FROM miembros_district WHERE numero_membresia IS NOT NULL ORDER BY numero_membresia DESC LIMIT 1")
+      .first<any>();
+    let nextNum = 1;
+    if (lastRow?.numero_membresia) {
+      const m = /DS-(\d+)/.exec(lastRow.numero_membresia);
+      if (m) nextNum = parseInt(m[1]) + 1;
+    }
+    const numeroMembresia = `DS-${String(nextNum).padStart(3, '0')}`;
+
     const id = newId();
     const ts = now();
     await db
       .prepare(
-        `INSERT INTO miembros_district (id, nombre, email, whatsapp, empresa, instagram, notas, activo, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+        `INSERT INTO miembros_district (id, nombre, email, whatsapp, empresa, instagram, notas, numero_membresia, activo, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
       )
-      .bind(id, nombre, get('email'), get('whatsapp'), get('empresa'), get('instagram'), get('notas'), ts, ts)
+      .bind(id, nombre, get('email'), get('whatsapp'), get('empresa'), get('instagram'), get('notas'), numeroMembresia, ts, ts)
       .run();
     return Astro.redirect(`/district/miembros/${id}`);
   }
