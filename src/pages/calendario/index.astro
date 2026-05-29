@@ -1,198 +1,338 @@
 ---
 import Layout from '../../components/Layout.astro';
-import EmptyState from '../../components/EmptyState.astro';
 import { requireUser } from '../../lib/session';
 import { getDB } from '../../lib/db';
 
 const user = requireUser(Astro);
 const db = getDB(Astro);
 
-const vista = Astro.url.searchParams.get('vista') ?? 'mias';
-
 interface Event {
   fecha: string;
-  tipo: string;
+  tipo: 'Tarea' | 'Producción' | 'Brief' | 'Pieza' | 'Contacto';
   titulo: string;
-  detalle: string | null;
   href: string;
   done?: boolean;
   prioridad?: string | null;
-  marca?: string | null;
+  esMia?: boolean;
 }
 
+const TIPOS = ['Tarea', 'Producción', 'Brief', 'Pieza', 'Contacto'] as const;
+type Tipo = typeof TIPOS[number];
+
+// Filtros
+const params = Astro.url.searchParams;
+const filtroParam = params.get('show');
+const filtrosActivos: Set<Tipo> = filtroParam
+  ? new Set(filtroParam.split(',').filter((t): t is Tipo => (TIPOS as readonly string[]).includes(t)))
+  : new Set(TIPOS);
+const soloMias = params.get('mias') === '1';
+
+// Mes a mostrar: YYYY-MM. Default mes actual.
 const today = new Date();
-const startStr = new Date(today.getTime() - 30 * 86400000).toISOString().slice(0, 10);
-const endStr = new Date(today.getTime() + 60 * 86400000).toISOString().slice(0, 10);
+const todayStr = today.toISOString().slice(0, 10);
+const mesParam = params.get('mes');
+const [y, m] = mesParam ? mesParam.split('-').map(Number) : [today.getFullYear(), today.getMonth() + 1];
+
+const firstOfMonth = new Date(Date.UTC(y, m - 1, 1));
+const lastOfMonth = new Date(Date.UTC(y, m, 0));
+const daysInMonth = lastOfMonth.getUTCDate();
+
+// Lunes como inicio de semana. JS: 0=domingo. Convertir a 0=lunes, 6=domingo.
+const firstWeekday = (firstOfMonth.getUTCDay() + 6) % 7;
+const totalCells = Math.ceil((firstWeekday + daysInMonth) / 7) * 7;
+
+const gridStart = new Date(firstOfMonth);
+gridStart.setUTCDate(gridStart.getUTCDate() - firstWeekday);
+const gridEnd = new Date(gridStart);
+gridEnd.setUTCDate(gridEnd.getUTCDate() + totalCells - 1);
+const startStr = gridStart.toISOString().slice(0, 10);
+const endStr = gridEnd.toISOString().slice(0, 10);
 
 let events: Event[] = [];
 
-if (vista === 'mias') {
-  // Solo tareas asignadas a este usuario
+if (filtrosActivos.has('Tarea')) {
+  const cond = soloMias ? 'AND a.asignado_a = ?' : '';
+  const binds: any[] = [startStr, endStr];
+  if (soloMias) binds.push(user.id);
   const tareas = await db
     .prepare(
-      `SELECT a.id, a.fecha, a.tarea, a.descripcion, a.prioridad, a.estado, a.done, a.produccion_id,
-              p.titulo as produccion_titulo
+      `SELECT a.id, a.fecha, a.tarea, a.prioridad, a.estado, a.asignado_a
        FROM acciones_calendario a
-       LEFT JOIN producciones p ON p.id = a.produccion_id
-       WHERE a.asignado_a = ? AND a.fecha BETWEEN ? AND ?
-       ORDER BY a.fecha`
+       WHERE a.fecha BETWEEN ? AND ? ${cond}`
     )
-    .bind(user.id, startStr, endStr)
+    .bind(...binds)
     .all<any>();
-
-  events = ((tareas.results ?? []) as any[]).map((e) => ({
+  events.push(...(tareas.results ?? []).map((e: any) => ({
     fecha: e.fecha,
-    tipo: 'Tarea',
+    tipo: 'Tarea' as const,
     titulo: e.tarea,
-    detalle: e.produccion_titulo ? `↳ ${e.produccion_titulo}` : (e.descripcion ?? null),
     href: `/tareas/${e.id}`,
     done: e.estado === 'completada',
-    prioridad: e.prioridad
-  }));
-} else {
-  // Vista general: producciones, briefs, piezas, próximas acciones contactos
-  const producciones = await db
-    .prepare(
-      `SELECT p.id, p.titulo, p.fecha_inicio as fecha, p.marca_id, p.estado, p.ubicacion_shoot,
-              p.tipo_produccion, c.nombre as cliente_nombre
-       FROM producciones p
-       LEFT JOIN clientes c ON c.id = p.cliente_id
-       WHERE p.fecha_inicio BETWEEN ? AND ? AND p.estado != 'cancelada'
-       ORDER BY p.fecha_inicio`
-    )
-    .bind(startStr, endStr)
-    .all<any>();
-
-  const briefsPiezas = await db
-    .prepare(
-      `SELECT id, titulo, fecha_publicacion as fecha, marca_id, estado, plataforma, formato
-       FROM briefs
-       WHERE fecha_publicacion BETWEEN ? AND ?
-       ORDER BY fecha_publicacion`
-    )
-    .bind(startStr, endStr)
-    .all<any>();
-
-  const piezas = await db
-    .prepare(
-      `SELECT id, titulo, fecha_programada as fecha, marca_id, estado, plataforma, formato
-       FROM piezas_contenido
-       WHERE fecha_programada BETWEEN ? AND ?
-       ORDER BY fecha_programada`
-    )
-    .bind(startStr, endStr)
-    .all<any>();
-
-  const proxAccionesContactos = await db
-    .prepare(
-      `SELECT id, nombre, next_action_date as fecha, next_action_text as detalle, tipo
-       FROM contactos
-       WHERE next_action_date BETWEEN ? AND ? AND estatus_crm != 'cerrado'
-       ORDER BY next_action_date`
-    )
-    .bind(startStr, endStr)
-    .all<any>();
-
-  events = [
-    ...((producciones.results ?? []) as any[]).map((e) => ({
-      fecha: e.fecha,
-      tipo: e.tipo_produccion ?? 'Producción',
-      titulo: e.titulo,
-      detalle: [e.cliente_nombre, e.ubicacion_shoot].filter(Boolean).join(' · ') || null,
-      href: `/producciones/${e.id}`,
-      marca: e.marca_id
-    })),
-    ...((briefsPiezas.results ?? []) as any[]).map((e) => ({
-      fecha: e.fecha,
-      tipo: 'Brief',
-      titulo: e.titulo,
-      detalle: [e.formato, e.plataforma].filter(Boolean).join(' / '),
-      href: `/briefs/${e.id}`,
-      marca: e.marca_id
-    })),
-    ...((piezas.results ?? []) as any[]).map((e) => ({
-      fecha: e.fecha,
-      tipo: 'Pieza',
-      titulo: e.titulo,
-      detalle: [e.formato, e.plataforma].filter(Boolean).join(' / '),
-      href: '/contenido',
-      marca: e.marca_id
-    })),
-    ...((proxAccionesContactos.results ?? []) as any[]).map((e) => ({
-      fecha: e.fecha,
-      tipo: 'Contacto',
-      titulo: `${e.nombre} — ${e.detalle || 'sin detalle'}`,
-      detalle: e.tipo,
-      href: `/contactos/${e.id}`
-    }))
-  ];
+    prioridad: e.prioridad,
+    esMia: e.asignado_a === user.id
+  })));
 }
 
-events.sort((a, b) => a.fecha.localeCompare(b.fecha));
+if (filtrosActivos.has('Producción')) {
+  const producciones = await db
+    .prepare(
+      `SELECT id, titulo, fecha_inicio as fecha, estado
+       FROM producciones
+       WHERE fecha_inicio BETWEEN ? AND ? AND estado != 'cancelada'`
+    )
+    .bind(startStr, endStr)
+    .all<any>();
+  events.push(...(producciones.results ?? []).map((e: any) => ({
+    fecha: e.fecha,
+    tipo: 'Producción' as const,
+    titulo: e.titulo,
+    href: `/producciones/${e.id}`
+  })));
+}
 
+if (filtrosActivos.has('Brief')) {
+  const briefs = await db
+    .prepare(
+      `SELECT id, titulo, fecha_publicacion as fecha
+       FROM briefs
+       WHERE fecha_publicacion BETWEEN ? AND ?`
+    )
+    .bind(startStr, endStr)
+    .all<any>();
+  events.push(...(briefs.results ?? []).map((e: any) => ({
+    fecha: e.fecha,
+    tipo: 'Brief' as const,
+    titulo: e.titulo,
+    href: `/briefs/${e.id}`
+  })));
+}
+
+if (filtrosActivos.has('Pieza')) {
+  const piezas = await db
+    .prepare(
+      `SELECT id, titulo, fecha_programada as fecha
+       FROM piezas_contenido
+       WHERE fecha_programada BETWEEN ? AND ?`
+    )
+    .bind(startStr, endStr)
+    .all<any>();
+  events.push(...(piezas.results ?? []).map((e: any) => ({
+    fecha: e.fecha,
+    tipo: 'Pieza' as const,
+    titulo: e.titulo,
+    href: '/contenido'
+  })));
+}
+
+if (filtrosActivos.has('Contacto')) {
+  const contactos = await db
+    .prepare(
+      `SELECT id, nombre, next_action_date as fecha, next_action_text
+       FROM contactos
+       WHERE next_action_date BETWEEN ? AND ? AND estatus_crm != 'cerrado'`
+    )
+    .bind(startStr, endStr)
+    .all<any>();
+  events.push(...(contactos.results ?? []).map((e: any) => ({
+    fecha: e.fecha,
+    tipo: 'Contacto' as const,
+    titulo: `${e.nombre}${e.next_action_text ? ' — ' + e.next_action_text : ''}`,
+    href: `/contactos/${e.id}`
+  })));
+}
+
+// Agrupar por fecha
 const byDate: Record<string, Event[]> = {};
 for (const e of events) {
+  if (!e.fecha) continue;
   byDate[e.fecha] = byDate[e.fecha] ?? [];
   byDate[e.fecha].push(e);
 }
-const sortedDates = Object.keys(byDate).sort();
 
-const todayStr = today.toISOString().slice(0, 10);
-const chipTipo: Record<string, string> = {
-  Tarea: 'chip-warning',
-  Producción: 'chip-gold',
-  Brief: 'chip',
-  Pieza: 'chip-ok',
-  Contacto: 'chip'
+// Navegación de mes
+const prevMonth = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+const nextMonth = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+const mesActual = `${y}-${String(m).padStart(2, '0')}`;
+const nombreMes = new Date(y, m - 1, 1).toLocaleDateString('es-MX', { month: 'long', year: 'numeric' });
+
+// Helper para construir hrefs preservando filtros
+function buildHref(overrides: Record<string, string | undefined>) {
+  const p = new URLSearchParams();
+  if (mesActual !== `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`) p.set('mes', mesActual);
+  if (filtroParam) p.set('show', filtroParam);
+  if (soloMias) p.set('mias', '1');
+  for (const k in overrides) {
+    if (overrides[k] === undefined) p.delete(k);
+    else if (overrides[k] === '') p.delete(k);
+    else p.set(k, overrides[k] as string);
+  }
+  const s = p.toString();
+  return `/calendario${s ? '?' + s : ''}`;
+}
+
+function toggleTipoHref(tipo: Tipo) {
+  const next = new Set(filtrosActivos);
+  if (next.has(tipo)) next.delete(tipo);
+  else next.add(tipo);
+  const show = next.size === TIPOS.length ? undefined : Array.from(next).join(',');
+  return buildHref({ show });
+}
+
+// Render del grid
+const cells: { date: string; day: number; inMonth: boolean; isToday: boolean }[] = [];
+for (let i = 0; i < totalCells; i++) {
+  const d = new Date(gridStart);
+  d.setUTCDate(d.getUTCDate() + i);
+  const iso = d.toISOString().slice(0, 10);
+  cells.push({
+    date: iso,
+    day: d.getUTCDate(),
+    inMonth: d.getUTCMonth() === m - 1,
+    isToday: iso === todayStr
+  });
+}
+
+const chipColor: Record<Tipo, string> = {
+  'Tarea': 'cal-tarea',
+  'Producción': 'cal-prod',
+  'Brief': 'cal-brief',
+  'Pieza': 'cal-pieza',
+  'Contacto': 'cal-contacto'
 };
 
-function fmtFecha(s: string) {
-  const d = new Date(s + 'T12:00:00');
-  return d.toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' });
-}
+const diasSemana = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 ---
 
 <Layout title="Calendario" pageTitle="Calendario">
   <div class="page-head">
-    <h1>Calendario</h1>
-    <span class="text-muted" style="font-size:12px">{startStr} → {endStr}</span>
+    <h1 style="text-transform:capitalize">{nombreMes}</h1>
+    <div style="display:flex;gap:8px;align-items:center">
+      <a href={buildHref({ mes: prevMonth })} class="btn btn-sm">←</a>
+      <a href="/calendario" class="btn btn-sm">hoy</a>
+      <a href={buildHref({ mes: nextMonth })} class="btn btn-sm">→</a>
+    </div>
   </div>
 
   <div class="filters" style="margin-bottom:8px">
-    <a href="/calendario?vista=mias" class={`filter-chip ${vista === 'mias' ? 'active' : ''}`}>mis tareas</a>
-    <a href="/calendario?vista=general" class={`filter-chip ${vista === 'general' ? 'active' : ''}`}>general</a>
+    {TIPOS.map((t) => (
+      <a href={toggleTipoHref(t)} class={`filter-chip cal-filter ${chipColor[t]} ${filtrosActivos.has(t) ? 'active' : ''}`}>
+        {filtrosActivos.has(t) ? '●' : '○'} {t === 'Producción' ? 'Producciones' : t === 'Pieza' ? 'Piezas' : t === 'Brief' ? 'Briefs' : t === 'Tarea' ? 'Tareas' : 'Contactos'}
+      </a>
+    ))}
   </div>
 
-  <p class="text-muted" style="font-size:12px;margin-bottom:24px">
-    {vista === 'mias'
-      ? 'Tus tareas asignadas con fecha en esta ventana.'
-      : 'Producciones, briefs, piezas, próximas acciones de contactos.'}
-  </p>
+  <div class="filters" style="margin-bottom:24px">
+    <a href={buildHref({ mias: soloMias ? undefined : '1' })} class={`filter-chip ${soloMias ? 'active' : ''}`}>
+      {soloMias ? '★' : '☆'} solo mis tareas
+    </a>
+  </div>
 
-  {sortedDates.length === 0 ? (
-    <EmptyState title="Sin eventos" message={vista === 'mias' ? 'No tienes tareas con fecha en esta ventana.' : 'No hay nada agendado en esta ventana de fechas.'} />
-  ) : (
-    sortedDates.map((date) => (
-      <div style={`margin-bottom:24px;${date === todayStr ? 'border-left:3px solid var(--gold);padding-left:16px' : ''}`}>
-        <h3 style="margin-bottom:8px;color:var(--gold)">{fmtFecha(date)} {date === todayStr && '(hoy)'}</h3>
-        {byDate[date].map((e) => (
-          <a href={e.href} style="display:block;color:inherit;text-decoration:none">
-            <article class="card" style="margin-bottom:8px">
-              <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start">
-                <div style="flex:1;min-width:0">
-                  <div style={`font-weight:500;font-size:14px;${e.done ? 'text-decoration:line-through;color:var(--text-2)' : ''}`}>{e.titulo}</div>
-                  {e.detalle && <small class="text-muted">{e.detalle}</small>}
-                </div>
-                <div style="display:flex;gap:6px;flex-direction:column;align-items:flex-end">
-                  <span class={`chip ${chipTipo[e.tipo] ?? 'chip-gold'}`}>{e.tipo}</span>
-                  {e.marca && <small class="text-muted">{e.marca}</small>}
-                  {e.prioridad && <span class={`chip ${e.prioridad === 'Alta' ? 'chip-danger' : 'chip'}`}>{e.prioridad}</span>}
-                </div>
-              </div>
-            </article>
+  <div class="cal-grid">
+    {diasSemana.map((d) => (
+      <div class="cal-weekday">{d}</div>
+    ))}
+    {cells.map((c) => (
+      <div class={`cal-cell ${c.inMonth ? '' : 'cal-out'} ${c.isToday ? 'cal-today' : ''}`}>
+        <div class="cal-daynum">{c.day}</div>
+        {(byDate[c.date] ?? []).slice(0, 4).map((e) => (
+          <a href={e.href} class={`cal-event ${chipColor[e.tipo]} ${e.done ? 'cal-done' : ''} ${e.esMia ? 'cal-mine' : ''}`} title={`${e.tipo} · ${e.titulo}`}>
+            {e.esMia && <span>★</span>}
+            {e.prioridad === 'Alta' && <span style="color:#ff6b6b">!</span>}
+            <span class="cal-event-title">{e.titulo}</span>
           </a>
         ))}
+        {(byDate[c.date]?.length ?? 0) > 4 && (
+          <div class="cal-more">+{(byDate[c.date]?.length ?? 0) - 4} más</div>
+        )}
       </div>
-    ))
-  )}
+    ))}
+  </div>
+
+  <style>
+    .cal-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+    }
+    .cal-weekday {
+      background: var(--bg-2);
+      padding: 8px 10px;
+      font-size: 11px;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--text-2);
+      text-align: left;
+    }
+    .cal-cell {
+      background: var(--bg);
+      min-height: 110px;
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      overflow: hidden;
+    }
+    .cal-out {
+      background: var(--bg-2);
+      opacity: .45;
+    }
+    .cal-today .cal-daynum {
+      background: var(--gold);
+      color: #000;
+      border-radius: 3px;
+      padding: 0 6px;
+      display: inline-block;
+      width: fit-content;
+    }
+    .cal-daynum {
+      font-size: 12px;
+      color: var(--text-2);
+      font-family: var(--font-mono);
+      margin-bottom: 2px;
+    }
+    .cal-event {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 11px;
+      padding: 2px 5px;
+      border-left: 2px solid;
+      text-decoration: none;
+      color: var(--text);
+      background: var(--bg-2);
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    .cal-event-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+      min-width: 0;
+    }
+    .cal-event:hover { background: var(--bg-3, #1a1a1a); }
+    .cal-event.cal-done { opacity: .4; text-decoration: line-through; }
+    .cal-event.cal-mine { font-weight: 500; }
+    .cal-tarea { border-left-color: #e9b949; }
+    .cal-prod { border-left-color: var(--gold); }
+    .cal-brief { border-left-color: #6ab7ff; }
+    .cal-pieza { border-left-color: #4ade80; }
+    .cal-contacto { border-left-color: #a78bfa; }
+    .cal-more {
+      font-size: 10px;
+      color: var(--text-2);
+      padding: 0 4px;
+    }
+    .cal-filter.cal-tarea.active { border-left: 3px solid #e9b949; }
+    .cal-filter.cal-prod.active { border-left: 3px solid var(--gold); }
+    .cal-filter.cal-brief.active { border-left: 3px solid #6ab7ff; }
+    .cal-filter.cal-pieza.active { border-left: 3px solid #4ade80; }
+    .cal-filter.cal-contacto.active { border-left: 3px solid #a78bfa; }
+    @media (max-width: 768px) {
+      .cal-cell { min-height: 80px; padding: 4px; }
+      .cal-event { font-size: 10px; }
+      .cal-weekday { font-size: 9px; padding: 6px; }
+    }
+  </style>
 </Layout>
