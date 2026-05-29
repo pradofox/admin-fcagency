@@ -9,7 +9,6 @@ const links = [
   { href: '/modelos', label: 'Modelos' },
   { href: '/producciones', label: 'Producciones' },
   { href: '/contenido', label: 'Redes Sociales' },
-  { href: '/contactos', label: 'Contactos' },
   { href: '/clientes', label: 'Clientes' },
   { href: '/cotizaciones', label: 'Cotizaciones' },
   { href: '/proveedores', label: 'Catálogo de Servicios' },
@@ -21,6 +20,8 @@ const links = [
 
 function isActive(href: string) {
   if (href === '/dashboard') return currentPath === href;
+  // Contactos vive dentro de Clientes: mantener el link activo en ambos.
+  if (href === '/clientes' && (currentPath === '/contactos' || currentPath.startsWith('/contactos/'))) return true;
   return currentPath === href || currentPath.startsWith(href + '/');
 }
 ---

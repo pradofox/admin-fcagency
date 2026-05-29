@@ -67,6 +67,9 @@ const fmt = (n: number | null) =>
 <Layout title="Clientes" pageTitle="Clientes">
   <div class="page-head">
     <h1>Clientes</h1>
+    <div style="display:flex;gap:8px">
+      <a href="/contactos" class="btn btn-sm">Contactos / CRM</a>
+    </div>
   </div>
 
   {error && <p class="text-danger">{error}</p>}

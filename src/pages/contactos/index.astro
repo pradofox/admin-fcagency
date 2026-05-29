@@ -47,7 +47,10 @@ const chipTipo: Record<string, string> = {
 <Layout title="Contactos" pageTitle="Contactos">
   <div class="page-head">
     <h1>Contactos</h1>
-    {canEdit(user) && <a href="/contactos/nuevo" class="btn btn-primary">+ Nuevo</a>}
+    <div style="display:flex;gap:8px">
+      <a href="/clientes" class="btn btn-sm">← Clientes</a>
+      {canEdit(user) && <a href="/contactos/nuevo" class="btn btn-primary">+ Nuevo</a>}
+    </div>
   </div>
 
   <form method="GET" action="/contactos" class="toolbar">
