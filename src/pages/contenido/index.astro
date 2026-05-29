@@ -189,7 +189,10 @@ function buildUrl(overrides: Record<string, string | undefined>) {
 <Layout title="Redes Sociales" pageTitle="Redes Sociales">
   <div class="page-head">
     <h1>Redes Sociales</h1>
-    <a href="/briefs/nuevo" class="btn btn-primary btn-sm">+ Nuevo brief</a>
+    <div style="display:flex;gap:8px">
+      <a href="/briefs" class="btn btn-sm">Briefs</a>
+      <a href="/briefs/nuevo" class="btn btn-primary btn-sm">+ Nuevo brief</a>
+    </div>
   </div>
 
   {msgOk  && <p class="text-ok"     style="margin-bottom:16px">{msgOk}</p>}
