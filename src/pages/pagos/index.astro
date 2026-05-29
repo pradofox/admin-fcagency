@@ -1,138 +1,246 @@
 ---
 import Layout from '../../components/Layout.astro';
 import EmptyState from '../../components/EmptyState.astro';
-import { requireUser } from '../../lib/session';
-import { getDB } from '../../lib/db';
+import { requireUser, canEdit } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { formatFecha } from '../../lib/fechas';
 
-requireUser(Astro);
+const user = requireUser(Astro);
+const editable = canEdit(user);
 const db = getDB(Astro);
 
-const filtroEstado = Astro.url.searchParams.get('estado') ?? 'pendiente';
+// Acción: marcar línea como pagada (solo si cliente pagó)
+let msgOk: string | null = null;
+let msgErr: string | null = null;
 
-// Agregado por proveedor (nombre_libre) y rol
-const sql = filtroEstado === 'todos'
-  ? `SELECT
-      COALESCE(NULLIF(lp.nombre_libre, ''), '(sin nombre)') as nombre,
-      lp.rol,
-      lp.estado,
-      COUNT(*) as cuenta,
-      SUM(lp.cobro_cliente) as cobro_total,
-      SUM(lp.pago_proveedor) as pago_total,
-      SUM(lp.cobro_cliente - lp.pago_proveedor) as utilidad_total
-    FROM lineas_produccion lp
-    GROUP BY nombre, lp.rol, lp.estado
-    ORDER BY pago_total DESC, nombre`
-  : `SELECT
-      COALESCE(NULLIF(lp.nombre_libre, ''), '(sin nombre)') as nombre,
-      lp.rol,
-      lp.estado,
-      COUNT(*) as cuenta,
-      SUM(lp.cobro_cliente) as cobro_total,
-      SUM(lp.pago_proveedor) as pago_total,
-      SUM(lp.cobro_cliente - lp.pago_proveedor) as utilidad_total
-    FROM lineas_produccion lp WHERE lp.estado = ?
-    GROUP BY nombre, lp.rol, lp.estado
-    ORDER BY pago_total DESC, nombre`;
+if (Astro.request.method === 'POST' && editable) {
+  const form   = await Astro.request.formData();
+  const action = form.get('_action') as string;
 
-const stmt = filtroEstado === 'todos' ? db.prepare(sql) : db.prepare(sql).bind(filtroEstado);
-const { results } = await stmt.all<any>();
+  if (action === 'pagar_linea') {
+    const lineaId = form.get('linea_id') as string;
+    // Verificar que el cliente ya pagó esa producción
+    const linea = await db
+      .prepare(`SELECT lp.id, p.pago_cliente_estado, p.titulo
+                FROM lineas_produccion lp
+                JOIN producciones p ON p.id = lp.produccion_id
+                WHERE lp.id = ?`)
+      .bind(lineaId)
+      .first<any>();
+    if (!linea) {
+      msgErr = 'Línea no encontrada.';
+    } else if (linea.pago_cliente_estado !== 'pagado') {
+      msgErr = `No puedes marcar el pago hasta que el cliente liquide "${linea.titulo}".`;
+    } else {
+      await db.prepare("UPDATE lineas_produccion SET estado = 'pagado' WHERE id = ?").bind(lineaId).run();
+      msgOk = 'Pago registrado.';
+    }
+  }
 
-// Totales globales
-const totales = await db
+  if (action === 'cliente_pago') {
+    const prodId = form.get('prod_id') as string;
+    await db.prepare("UPDATE producciones SET pago_cliente_estado = 'pagado', updated_at = ? WHERE id = ?").bind(now(), prodId).run();
+    msgOk = 'Cobro registrado.';
+  }
+}
+
+const tab = Astro.url.searchParams.get('tab') ?? 'cobros';
+
+// ── COBROS ── Producciones con pago de cliente pendiente ─────────────────────
+const { results: cobros } = await db
   .prepare(
-    `SELECT
-      SUM(cobro_cliente) as cobro_total,
-      SUM(pago_proveedor) as pago_total,
-      SUM(cobro_cliente - pago_proveedor) as utilidad_total
-    FROM lineas_produccion WHERE estado != 'cancelado'`
-  )
-  .first<any>();
-
-const totalesPorEstado = await db
-  .prepare(
-    `SELECT estado, COUNT(*) as cuenta, SUM(pago_proveedor) as pago FROM lineas_produccion GROUP BY estado`
+    `SELECT p.id, p.titulo, p.fecha_inicio, p.estado as prod_estado, p.tipo_produccion,
+            p.pago_cliente_estado,
+            c.nombre as cliente_nombre,
+            SUM(lp.cobro_cliente) as total_cobrar,
+            COUNT(lp.id) as n_lineas
+     FROM producciones p
+     LEFT JOIN clientes c ON c.id = p.cliente_id
+     LEFT JOIN lineas_produccion lp ON lp.produccion_id = p.id AND lp.estado != 'cancelado'
+     WHERE p.pago_cliente_estado = 'pendiente' AND p.estado != 'cancelada'
+     GROUP BY p.id
+     ORDER BY p.fecha_inicio DESC`
   )
   .all<any>();
 
-const fmt = (n: number | null) =>
-  n ? `$${Math.round(n).toLocaleString('es-MX')}` : '$0';
+// ── PAGOS ── Líneas pendientes de pago a proveedores ─────────────────────────
+const { results: pagos } = await db
+  .prepare(
+    `SELECT lp.id as linea_id, lp.nombre_libre, lp.rol, lp.cobro_cliente, lp.pago_proveedor, lp.estado as linea_estado,
+            p.id as prod_id, p.titulo, p.fecha_inicio, p.pago_cliente_estado,
+            c.nombre as cliente_nombre
+     FROM lineas_produccion lp
+     JOIN producciones p ON p.id = lp.produccion_id
+     LEFT JOIN clientes c ON c.id = p.cliente_id
+     WHERE lp.estado = 'pendiente' AND p.estado != 'cancelada'
+     ORDER BY p.pago_cliente_estado ASC, p.fecha_inicio DESC, lp.nombre_libre ASC`
+  )
+  .all<any>();
 
-const chipEstado: Record<string, string> = {
-  pendiente: 'chip-warning',
-  pagado: 'chip-ok',
-  cancelado: 'chip-danger'
-};
+// Totales
+const totalCobrar    = cobros?.reduce((s: number, r: any) => s + (r.total_cobrar ?? 0), 0) ?? 0;
+const pagosBloqueados = pagos?.filter((r: any) => r.pago_cliente_estado !== 'pagado') ?? [];
+const pagosLibres     = pagos?.filter((r: any) => r.pago_cliente_estado === 'pagado')  ?? [];
+const totalPagar      = pagosLibres.reduce((s: number, r: any) => s + (r.pago_proveedor ?? 0), 0);
+const totalBloqueado  = pagosBloqueados.reduce((s: number, r: any) => s + (r.pago_proveedor ?? 0), 0);
+
+const fmt = (n: number | null | undefined) =>
+  n != null && n > 0 ? `$${Math.round(n).toLocaleString('es-MX')}` : '$0';
 ---
 
-<Layout title="Pagos" pageTitle="Pagos a proveedores">
+<Layout title="Cobros y Pagos" pageTitle="Cobros y Pagos">
   <div class="page-head">
-    <h1>Pagos</h1>
+    <h1>Cobros y Pagos</h1>
     <a href="/api/pagos/export" class="btn btn-sm">Exportar CSV</a>
   </div>
 
-  <p class="text-muted" style="font-size:12px;margin-bottom:24px">
-    Resumen agregado por proveedor de las líneas de producción. Las líneas se gestionan
-    desde cada producción individual.
-  </p>
+  {msgOk && <p class="text-ok" style="margin-bottom:16px">{msgOk}</p>}
+  {msgErr && <p class="text-danger" style="margin-bottom:16px">{msgErr}</p>}
 
-  <div class="grid-dense" style="margin-bottom:24px">
-    <div class="stat stat-gold">
-      <div class="stat-value">{fmt(totales?.cobro_total)}</div>
-      <div class="stat-label">Cobrado al cliente</div>
+  <div class="row" style="margin-bottom:24px">
+    <div class="col card">
+      <div class="card-meta">Por cobrar a clientes</div>
+      <div class="card-title mono" style="color:#e9b949">{fmt(totalCobrar)}</div>
+      <small class="text-muted">{cobros?.length ?? 0} produccion{cobros?.length !== 1 ? 'es' : ''}</small>
     </div>
-    <div class="stat">
-      <div class="stat-value">{fmt(totales?.pago_total)}</div>
-      <div class="stat-label">Pago a proveedores</div>
+    <div class="col card">
+      <div class="card-meta">Por pagar — disponible</div>
+      <div class="card-title mono text-ok">{fmt(totalPagar)}</div>
+      <small class="text-muted">{pagosLibres.length} línea{pagosLibres.length !== 1 ? 's' : ''}</small>
     </div>
-    <div class="stat stat-ok">
-      <div class="stat-value">{fmt(totales?.utilidad_total)}</div>
-      <div class="stat-label">Utilidad</div>
+    <div class="col card">
+      <div class="card-meta">Por pagar — bloqueado</div>
+      <div class="card-title mono" style="color:var(--danger,#e25555)">{fmt(totalBloqueado)}</div>
+      <small class="text-muted">Esperando cobro al cliente</small>
     </div>
   </div>
 
-  <div class="filters">
-    {['todos', 'pendiente', 'pagado', 'cancelado'].map((e) => (
-      <a href={`/pagos?estado=${e}`} class={`filter-chip ${filtroEstado === e ? 'active' : ''}`}>
-        {e}
-        {totalesPorEstado.results && (
-          <span class="text-muted" style="margin-left:6px">
-            {(totalesPorEstado.results as any[]).find((r) => r.estado === e)?.cuenta ?? (e === 'todos' ? totalesPorEstado.results.reduce((a: number, b: any) => a + b.cuenta, 0) : 0)}
-          </span>
+  <!-- Tabs -->
+  <div class="filters" style="margin-bottom:24px">
+    <a href="/pagos?tab=cobros" class={`filter-chip ${tab === 'cobros' ? 'active' : ''}`}>
+      Cobros a clientes {cobros?.length ? `(${cobros.length})` : ''}
+    </a>
+    <a href="/pagos?tab=pagos" class={`filter-chip ${tab === 'pagos' ? 'active' : ''}`}>
+      Pagos a proveedores {pagos?.length ? `(${pagos.length})` : ''}
+    </a>
+  </div>
+
+  {tab === 'cobros' && (
+    cobros && cobros.length > 0 ? (
+      <div>
+        {cobros.map((r: any) => (
+          <div class="card" style="margin-bottom:10px;border-left:3px solid #e9b949">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px">
+              <div style="flex:1">
+                <div style="font-weight:600">
+                  <a href={`/producciones/${r.id}`} style="color:inherit">{r.titulo}</a>
+                </div>
+                <div class="card-meta" style="margin-top:4px">
+                  <span class="text-muted">{r.cliente_nombre ?? 'Sin cliente'}</span>
+                  {r.tipo_produccion && <span class="chip">{r.tipo_produccion}</span>}
+                  <span class="mono">{formatFecha(r.fecha_inicio)}</span>
+                  <span class="chip">{r.prod_estado}</span>
+                  <span class="text-muted">{r.n_lineas} línea{r.n_lineas !== 1 ? 's' : ''}</span>
+                </div>
+              </div>
+              <div style="text-align:right;flex-shrink:0">
+                <div class="mono" style="color:#e9b949;font-size:18px">{fmt(r.total_cobrar)}</div>
+                {editable && (
+                  <form method="POST" action="/pagos" style="margin-top:8px">
+                    <input type="hidden" name="_action" value="cliente_pago" />
+                    <input type="hidden" name="prod_id" value={r.id} />
+                    <button type="submit" class="btn btn-sm btn-primary"
+                      onclick="return confirm('¿Confirmar que el cliente pagó esta producción?')">
+                      Marcar cobrado
+                    </button>
+                  </form>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    ) : (
+      <EmptyState title="Sin cobros pendientes" message="Todas las producciones tienen el pago del cliente al día." />
+    )
+  )}
+
+  {tab === 'pagos' && (
+    pagos && pagos.length > 0 ? (
+      <div>
+        {pagosLibres.length > 0 && (
+          <div style="margin-bottom:32px">
+            <h2 style="color:var(--text-ok,#4ade80);margin-bottom:12px">Listos para pagar ({pagosLibres.length})</h2>
+            <div class="table-card">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Proveedor</th><th>Rol</th><th>Producción</th><th>Cliente</th>
+                    <th class="right">Cobrado</th><th class="right">A pagar</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pagosLibres.map((r: any) => (
+                    <tr>
+                      <td><strong>{r.nombre_libre ?? '—'}</strong></td>
+                      <td class="text-muted">{r.rol}</td>
+                      <td><a href={`/producciones/${r.prod_id}`} style="color:var(--gold)">{r.titulo}</a></td>
+                      <td class="text-muted">{r.cliente_nombre ?? '—'}</td>
+                      <td class="right mono">{fmt(r.cobro_cliente)}</td>
+                      <td class="right mono text-ok">{fmt(r.pago_proveedor)}</td>
+                      <td>
+                        {editable && (
+                          <form method="POST" action="/pagos">
+                            <input type="hidden" name="_action" value="pagar_linea" />
+                            <input type="hidden" name="linea_id" value={r.linea_id} />
+                            <button type="submit" class="btn btn-sm btn-primary">Pagar</button>
+                          </form>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
-      </a>
-    ))}
-  </div>
 
-  {results && results.length > 0 ? (
-    <div class="table-card">
-      <table>
-        <thead>
-          <tr>
-            <th>Proveedor</th>
-            <th>Rol</th>
-            <th>Estado</th>
-            <th class="right">Líneas</th>
-            <th class="right">Cobrado</th>
-            <th class="right">Pago</th>
-            <th class="right">Utilidad</th>
-          </tr>
-        </thead>
-        <tbody>
-          {results.map((r: any) => (
-            <tr>
-              <td><strong>{r.nombre}</strong></td>
-              <td class="text-muted">{r.rol}</td>
-              <td><span class={`chip ${chipEstado[r.estado] ?? ''}`}>{r.estado}</span></td>
-              <td class="right mono">{r.cuenta}</td>
-              <td class="right mono">{fmt(r.cobro_total)}</td>
-              <td class="right mono text-gold">{fmt(r.pago_total)}</td>
-              <td class="right mono text-ok">{fmt(r.utilidad_total)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  ) : (
-    <EmptyState title="Sin líneas" message={`No hay líneas en estado "${filtroEstado}".`} />
+        {pagosBloqueados.length > 0 && (
+          <div>
+            <h2 style="color:var(--danger,#e25555);margin-bottom:4px">Bloqueados — cliente no ha pagado ({pagosBloqueados.length})</h2>
+            <p class="text-muted" style="font-size:12px;margin-bottom:12px">
+              Estos pagos se desbloquean automáticamente cuando registras el cobro al cliente en la pestaña <strong>Cobros</strong>.
+            </p>
+            <div class="table-card">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Proveedor</th><th>Rol</th><th>Producción</th><th>Cliente</th>
+                    <th class="right">Cobrado</th><th class="right">A pagar</th><th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pagosBloqueados.map((r: any) => (
+                    <tr style="opacity:.65">
+                      <td><strong>{r.nombre_libre ?? '—'}</strong></td>
+                      <td class="text-muted">{r.rol}</td>
+                      <td><a href={`/producciones/${r.prod_id}`} style="color:var(--gold)">{r.titulo}</a></td>
+                      <td class="text-muted">{r.cliente_nombre ?? '—'}</td>
+                      <td class="right mono">{fmt(r.cobro_cliente)}</td>
+                      <td class="right mono" style="color:var(--danger,#e25555)">{fmt(r.pago_proveedor)}</td>
+                      <td>
+                        <span class="chip chip-danger" style="font-size:10px">bloqueado</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+    ) : (
+      <EmptyState title="Sin pagos pendientes" message="No hay líneas de producción con pago pendiente." />
+    )
   )}
 </Layout>

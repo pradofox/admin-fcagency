@@ -11,23 +11,27 @@ const editable = canEdit(user);
 const db = getDB(Astro);
 
 let error: string | null = null;
+let editId: string | null = Astro.url.searchParams.get('editar');
 
 if (Astro.request.method === 'POST' && editable) {
-  const form = await Astro.request.formData();
-  const action = form.get('_action');
+  const form   = await Astro.request.formData();
+  const action = form.get('_action') as string;
+
   if (action === 'delete') {
     await db.prepare('DELETE FROM planes_district WHERE id = ?').bind(form.get('id')).run();
     return Astro.redirect('/district/planes');
   }
+
   if (action === 'toggle') {
-    const id = form.get('id') as string;
+    const id      = form.get('id') as string;
     const current = form.get('current') === '1' ? 0 : 1;
     await db.prepare('UPDATE planes_district SET activo = ? WHERE id = ?').bind(current, id).run();
     return Astro.redirect('/district/planes');
   }
+
   const nombre = (form.get('nombre') as string)?.trim();
   if (!nombre) {
-    error = 'Nombre del plan es obligatorio.';
+    error = 'El nombre del plan es obligatorio.';
   } else {
     const get = (k: string) => {
       const v = form.get(k);
@@ -38,21 +42,54 @@ if (Astro.request.method === 'POST' && editable) {
       const n = v === null || v === '' ? def : Number(v);
       return Number.isFinite(n) ? n : def;
     };
+
+    if (action === 'edit') {
+      const planId = form.get('id') as string;
+      await db
+        .prepare(
+          `UPDATE planes_district SET
+             nombre = ?, tipo = ?, precio_mxn = ?, precio_descuento_mxn = ?,
+             duracion_dias = ?, descripcion = ?,
+             incluye_estudio_horas = ?, incluye_horas_sala_juntas = ?,
+             incluye_cowork = ?, incluye_club = ?
+           WHERE id = ?`
+        )
+        .bind(
+          nombre,
+          get('tipo') ?? 'cowork',
+          num('precio_mxn'),
+          get('precio_descuento_mxn') ? num('precio_descuento_mxn') : null,
+          num('duracion_dias', 30),
+          get('descripcion'),
+          num('incluye_estudio_horas'),
+          num('incluye_horas_sala_juntas'),
+          form.get('incluye_cowork') ? 1 : 0,
+          form.get('incluye_club') ? 1 : 0,
+          planId
+        )
+        .run();
+      return Astro.redirect('/district/planes');
+    }
+
+    // Crear nuevo
     await db
       .prepare(
         `INSERT INTO planes_district (
-          id, nombre, tipo, precio_mxn, duracion_dias, descripcion,
-          incluye_estudio_horas, incluye_cowork, incluye_club, activo, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`
+           id, nombre, tipo, precio_mxn, precio_descuento_mxn, duracion_dias, descripcion,
+           incluye_estudio_horas, incluye_horas_sala_juntas, incluye_cowork, incluye_club,
+           activo, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`
       )
       .bind(
         newId(),
         nombre,
         get('tipo') ?? 'cowork',
         num('precio_mxn'),
+        get('precio_descuento_mxn') ? num('precio_descuento_mxn') : null,
         num('duracion_dias', 30),
         get('descripcion'),
         num('incluye_estudio_horas'),
+        num('incluye_horas_sala_juntas'),
         form.get('incluye_cowork') ? 1 : 0,
         form.get('incluye_club') ? 1 : 0,
         now()
@@ -72,22 +109,23 @@ const { results: planes } = await db
   .all<any>();
 
 const TIPOS = ['cowork', 'estudio', 'club', 'mixto', 'day_pass'];
+
+const fmt = (n: number | null | undefined) =>
+  n != null ? `$${Math.round(n).toLocaleString('es-MX')}` : '—';
 ---
 
 <Layout title="District — Planes" pageTitle="District Studio">
-  <div class="page-head">
-    <h1>Planes</h1>
-  </div>
+  <div class="page-head"><h1>Planes</h1></div>
   <DistrictNav />
 
-  {error && <p class="text-danger">{error}</p>}
+  {error && <p class="text-danger" style="margin-bottom:16px">{error}</p>}
 
   {editable && (
     <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:32px">
       <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Nuevo plan</summary>
       <form method="POST" action="/district/planes" style="margin-top:16px">
         <label class="label">Nombre del plan *</label>
-        <input class="input" name="nombre" required placeholder="Ej. Cowork mensual" />
+        <input class="input" name="nombre" required placeholder="Ej. Membresía Cowork Mensual" />
 
         <div class="row">
           <div class="col">
@@ -97,34 +135,40 @@ const TIPOS = ['cowork', 'estudio', 'club', 'mixto', 'day_pass'];
             </select>
           </div>
           <div class="col">
-            <label class="label">Precio MXN</label>
-            <input class="input" type="number" step="0.01" name="precio_mxn" />
+            <label class="label">Precio real MXN</label>
+            <input class="input" type="number" step="0.01" name="precio_mxn" placeholder="0" />
+          </div>
+          <div class="col">
+            <label class="label">Precio con descuento MXN</label>
+            <input class="input" type="number" step="0.01" name="precio_descuento_mxn" placeholder="opcional" />
           </div>
           <div class="col">
             <label class="label">Duración (días)</label>
             <input class="input" type="number" name="duracion_dias" value="30" />
           </div>
-          <div class="col">
-            <label class="label">Horas estudio incluidas</label>
-            <input class="input" type="number" name="incluye_estudio_horas" value="0" />
-          </div>
         </div>
 
         <div class="row">
           <div class="col">
-            <label class="label" style="display:flex;gap:6px;align-items:center">
-              <input type="checkbox" name="incluye_cowork" /> Incluye cowork
-            </label>
+            <label class="label">Días de estudio incluidos</label>
+            <input class="input" type="number" name="incluye_estudio_horas" value="0" min="0" />
           </div>
           <div class="col">
-            <label class="label" style="display:flex;gap:6px;align-items:center">
+            <label class="label">Horas sala de juntas incluidas</label>
+            <input class="input" type="number" name="incluye_horas_sala_juntas" value="0" min="0" />
+          </div>
+          <div class="col" style="display:flex;gap:16px;align-items:center;padding-top:22px">
+            <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+              <input type="checkbox" name="incluye_cowork" /> Incluye hot desk
+            </label>
+            <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
               <input type="checkbox" name="incluye_club" /> Incluye club
             </label>
           </div>
         </div>
 
         <label class="label">Descripción</label>
-        <textarea class="textarea" name="descripcion" placeholder="Qué incluye, restricciones, etc."></textarea>
+        <textarea class="textarea" name="descripcion" placeholder="Qué incluye, restricciones, horarios..."></textarea>
 
         <button type="submit" class="btn btn-primary" style="margin-top:16px">Crear plan</button>
       </form>
@@ -134,22 +178,41 @@ const TIPOS = ['cowork', 'estudio', 'club', 'mixto', 'day_pass'];
   {planes && planes.length > 0 ? (
     <div class="grid">
       {planes.map((p: any) => (
-        <article class="card" style={p.activo ? '' : 'opacity:.5'}>
-          <div class="card-title">{p.nombre}</div>
-          <div class="card-meta">
-            <span class="chip">{p.tipo}</span>
-            <span class="text-gold mono">${Math.round(p.precio_mxn).toLocaleString('es-MX')}</span>
-            <span class="text-muted">/ {p.duracion_dias} días</span>
+        <article class="card" style={p.activo ? '' : 'opacity:.5;border-style:dashed'}>
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+            <div>
+              <div class="card-title" style="font-size:16px">{p.nombre}</div>
+              <div class="card-meta" style="margin-top:4px">
+                <span class="chip">{p.tipo}</span>
+                {!p.activo && <span class="chip chip-danger">inactivo</span>}
+              </div>
+            </div>
+            <div style="text-align:right;flex-shrink:0">
+              {p.precio_descuento_mxn ? (
+                <>
+                  <div class="mono" style="text-decoration:line-through;opacity:.5;font-size:13px">{fmt(p.precio_mxn)}</div>
+                  <div class="mono text-gold" style="font-size:20px">{fmt(p.precio_descuento_mxn)}</div>
+                </>
+              ) : (
+                <div class="mono text-gold" style="font-size:20px">{fmt(p.precio_mxn)}</div>
+              )}
+              <small class="text-muted">/ {p.duracion_dias} días</small>
+            </div>
           </div>
-          {p.descripcion && <p class="text-muted" style="font-size:13px;margin-top:8px">{p.descripcion}</p>}
-          <div class="card-meta" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
-            {p.incluye_estudio_horas > 0 && <span class="chip">📷 {p.incluye_estudio_horas}h estudio</span>}
-            {p.incluye_cowork ? <span class="chip">✓ cowork</span> : null}
+
+          <div class="card-meta" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+            {(p.incluye_estudio_horas ?? 0) > 0 && <span class="chip">📷 {p.incluye_estudio_horas} días estudio</span>}
+            {(p.incluye_horas_sala_juntas ?? 0) > 0 && <span class="chip">🪑 {p.incluye_horas_sala_juntas}h sala juntas</span>}
+            {p.incluye_cowork ? <span class="chip">✓ hot desk</span> : null}
             {p.incluye_club ? <span class="chip">✓ club</span> : null}
             <span style="margin-left:auto;font-size:12px"><strong>{p.suscritos}</strong> <span class="text-muted">activos</span></span>
           </div>
+
+          {p.descripcion && <p class="text-muted" style="font-size:13px;margin-top:8px">{p.descripcion}</p>}
+
           {editable && (
-            <div style="margin-top:12px;display:flex;gap:6px">
+            <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap">
+              <a href={`/district/planes?editar=${p.id}`} class="btn btn-sm">Editar</a>
               <form method="POST" action="/district/planes" style="display:inline">
                 <input type="hidden" name="_action" value="toggle" />
                 <input type="hidden" name="id" value={p.id} />
@@ -164,6 +227,67 @@ const TIPOS = ['cowork', 'estudio', 'club', 'mixto', 'day_pass'];
                 </form>
               )}
             </div>
+          )}
+
+          {editable && editId === p.id && (
+            <details open style="margin-top:16px;background:var(--bg);border:1px solid var(--gold);padding:16px">
+              <summary style="cursor:pointer;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-bottom:12px">Editar plan</summary>
+              <form method="POST" action="/district/planes" style="margin-top:12px">
+                <input type="hidden" name="_action" value="edit" />
+                <input type="hidden" name="id" value={p.id} />
+
+                <label class="label">Nombre *</label>
+                <input class="input" name="nombre" value={p.nombre} required />
+
+                <div class="row">
+                  <div class="col">
+                    <label class="label">Tipo</label>
+                    <select class="select" name="tipo">
+                      {TIPOS.map((t) => <option value={t} selected={p.tipo === t}>{t}</option>)}
+                    </select>
+                  </div>
+                  <div class="col">
+                    <label class="label">Precio real MXN</label>
+                    <input class="input" type="number" step="0.01" name="precio_mxn" value={p.precio_mxn ?? ''} />
+                  </div>
+                  <div class="col">
+                    <label class="label">Precio con descuento MXN</label>
+                    <input class="input" type="number" step="0.01" name="precio_descuento_mxn" value={p.precio_descuento_mxn ?? ''} placeholder="opcional" />
+                  </div>
+                  <div class="col">
+                    <label class="label">Duración (días)</label>
+                    <input class="input" type="number" name="duracion_dias" value={p.duracion_dias ?? 30} />
+                  </div>
+                </div>
+
+                <div class="row">
+                  <div class="col">
+                    <label class="label">Días de estudio incluidos</label>
+                    <input class="input" type="number" name="incluye_estudio_horas" value={p.incluye_estudio_horas ?? 0} min="0" />
+                  </div>
+                  <div class="col">
+                    <label class="label">Horas sala de juntas incluidas</label>
+                    <input class="input" type="number" name="incluye_horas_sala_juntas" value={p.incluye_horas_sala_juntas ?? 0} min="0" />
+                  </div>
+                  <div class="col" style="display:flex;gap:16px;align-items:center;padding-top:22px">
+                    <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+                      <input type="checkbox" name="incluye_cowork" checked={!!p.incluye_cowork} /> Incluye hot desk
+                    </label>
+                    <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
+                      <input type="checkbox" name="incluye_club" checked={!!p.incluye_club} /> Incluye club
+                    </label>
+                  </div>
+                </div>
+
+                <label class="label">Descripción</label>
+                <textarea class="textarea" name="descripcion">{p.descripcion ?? ''}</textarea>
+
+                <div style="display:flex;gap:8px;margin-top:14px">
+                  <button type="submit" class="btn btn-primary">Guardar cambios</button>
+                  <a href="/district/planes" class="btn">Cancelar</a>
+                </div>
+              </form>
+            </details>
           )}
         </article>
       ))}
