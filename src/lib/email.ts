@@ -40,13 +40,13 @@ export async function sendMagicLink(
 function buildEmailHtml(link: string): string {
   return `<!DOCTYPE html>
 <html>
-  <body style="background:#0E0E0E;color:#F0F0F0;font-family:system-ui,sans-serif;padding:40px 20px;margin:0">
-    <div style="max-width:480px;margin:0 auto;background:#161616;border:1px solid #2A2A2A;border-radius:4px;padding:40px">
-      <div style="font-family:'Bebas Neue',sans-serif;font-size:28px;letter-spacing:.35em;color:#C9A84C;margin-bottom:32px">FC AGENCY</div>
-      <p style="font-size:15px;line-height:1.6;margin:0 0 24px">Hola.</p>
-      <p style="font-size:15px;line-height:1.6;margin:0 0 32px">Da click en el botón para entrar a la plataforma. El link funciona por 15 minutos.</p>
-      <a href="${link}" style="display:inline-block;background:#C9A84C;color:#000;padding:14px 32px;font-size:12px;letter-spacing:.25em;text-transform:uppercase;text-decoration:none;font-weight:600">Entrar</a>
-      <p style="font-size:12px;color:#666;line-height:1.6;margin:32px 0 0">Si no pediste este acceso, ignora este correo.</p>
+  <body style="background:#080808;color:#F5F5F5;font-family:'Inter',system-ui,-apple-system,sans-serif;padding:40px 20px;margin:0">
+    <div style="max-width:440px;margin:0 auto;background:#0E0E0E;border:1px solid #262626;border-radius:6px;padding:36px 32px">
+      <div style="font-size:14px;font-weight:600;color:#F5F5F5;margin-bottom:28px;letter-spacing:-0.005em">FC Admin</div>
+      <p style="font-size:14px;line-height:1.6;margin:0 0 20px;color:#F5F5F5">Hola.</p>
+      <p style="font-size:14px;line-height:1.6;margin:0 0 28px;color:#B3B3B3">Da click en el botón para entrar a la plataforma. El link funciona por 15 minutos.</p>
+      <a href="${link}" style="display:inline-block;background:#FFFFFF;color:#000;padding:10px 24px;font-size:13px;text-decoration:none;font-weight:600;border-radius:4px">Entrar a la plataforma</a>
+      <p style="font-size:11.5px;color:#808080;line-height:1.6;margin:28px 0 0">Si no pediste este acceso, ignora este correo.</p>
     </div>
   </body>
 </html>`;
