@@ -8,7 +8,7 @@ const user = getUser(Astro);
 <header class="header">
   <div class="header-title">{title ?? ''}</div>
   <div class="header-user">
-    {user && <span>{user.email}</span>}
+    {user && <a href="/perfil">{user.nombre} · {user.rol}</a>}
     <a href="/logout">Cerrar sesión</a>
   </div>
 </header>
