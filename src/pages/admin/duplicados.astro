@@ -1,0 +1,124 @@
+---
+import Layout from '../../components/Layout.astro';
+import { requireAdmin } from '../../lib/session';
+import { getDB } from '../../lib/db';
+
+requireAdmin(Astro);
+const db = getDB(Astro);
+
+// Modelos con nombre similar (case-insensitive, ignorando espacios/acentos)
+const { results: dupModelos } = await db
+  .prepare(
+    `SELECT m1.id as id1, m1.nombre as nombre1, m1.estado as estado1, m1.instagram as ig1,
+            m2.id as id2, m2.nombre as nombre2, m2.estado as estado2, m2.instagram as ig2
+     FROM modelos m1
+     JOIN modelos m2 ON m1.id < m2.id
+        AND LOWER(TRIM(REPLACE(REPLACE(REPLACE(m1.nombre, ' ', ''), '.', ''), '-', '')))
+          = LOWER(TRIM(REPLACE(REPLACE(REPLACE(m2.nombre, ' ', ''), '.', ''), '-', '')))
+     ORDER BY m1.nombre LIMIT 50`
+  )
+  .all<any>();
+
+// Contactos con nombres similares a modelos del roster
+const { results: contactosVsModelos } = await db
+  .prepare(
+    `SELECT c.id as cid, c.nombre as cnombre, c.tipo as ctipo,
+            m.id as mid, m.nombre as mnombre, m.estado as mestado
+     FROM contactos c
+     JOIN modelos m ON
+        LOWER(TRIM(REPLACE(REPLACE(c.nombre, ' ', ''), '.', '')))
+          = LOWER(TRIM(REPLACE(REPLACE(m.nombre, ' ', ''), '.', '')))
+     WHERE c.tipo = 'modelo'
+     ORDER BY c.nombre LIMIT 50`
+  )
+  .all<any>();
+
+// Líneas de producción con nombre_libre que NO matchea con ningún modelo
+const { results: lineasHuerfanas } = await db
+  .prepare(
+    `SELECT lp.id, lp.rol, lp.nombre_libre, lp.cobro_cliente,
+            p.titulo as prod_titulo, p.id as prod_id
+     FROM lineas_produccion lp
+     JOIN producciones p ON p.id = lp.produccion_id
+     WHERE lp.rol = 'Modelo'
+       AND lp.modelo_id IS NULL
+       AND lp.nombre_libre IS NOT NULL
+       AND lp.nombre_libre != ''
+     ORDER BY lp.nombre_libre LIMIT 50`
+  )
+  .all<any>();
+---
+
+<Layout title="Duplicados" pageTitle="Limpieza de datos">
+  <div class="page-head">
+    <h1>Limpieza de datos</h1>
+    <a href="/admin" class="btn btn-sm">Volver</a>
+  </div>
+
+  <p class="text-muted" style="font-size:12px;margin-bottom:24px">
+    Detección heurística de duplicados y referencias rotas. Revisa manualmente antes de actuar.
+  </p>
+
+  <h2>Modelos posiblemente duplicadas ({dupModelos?.length ?? 0})</h2>
+  {dupModelos && dupModelos.length > 0 ? (
+    <div style="margin-bottom:32px">
+      {dupModelos.map((d: any) => (
+        <div class="card" style="margin-bottom:8px;display:flex;gap:14px;align-items:center;justify-content:space-between">
+          <div style="flex:1">
+            <a href={`/modelos/${d.id1}`}>{d.nombre1}</a>
+            <small class="text-muted"> · {d.estado1}{d.ig1 ? ` · ${d.ig1}` : ''}</small>
+          </div>
+          <span class="text-muted">≈</span>
+          <div style="flex:1">
+            <a href={`/modelos/${d.id2}`}>{d.nombre2}</a>
+            <small class="text-muted"> · {d.estado2}{d.ig2 ? ` · ${d.ig2}` : ''}</small>
+          </div>
+        </div>
+      ))}
+    </div>
+  ) : (
+    <p class="text-muted" style="margin-bottom:32px">Sin duplicados detectados.</p>
+  )}
+
+  <h2>Contactos tipo "modelo" que existen también en el roster ({contactosVsModelos?.length ?? 0})</h2>
+  <p class="text-muted" style="font-size:12px;margin-bottom:8px">
+    Estos contactos representan la misma persona que un modelo del roster. Considera consolidar.
+  </p>
+  {contactosVsModelos && contactosVsModelos.length > 0 ? (
+    <div style="margin-bottom:32px">
+      {contactosVsModelos.map((d: any) => (
+        <div class="card" style="margin-bottom:8px;display:flex;gap:14px;align-items:center;justify-content:space-between">
+          <div style="flex:1">
+            <span class="chip">contacto</span> <a href={`/contactos/${d.cid}`}>{d.cnombre}</a>
+          </div>
+          <span class="text-muted">↔</span>
+          <div style="flex:1">
+            <span class="chip chip-gold">roster</span> <a href={`/modelos/${d.mid}`}>{d.mnombre}</a>
+            <small class="text-muted"> · {d.mestado}</small>
+          </div>
+        </div>
+      ))}
+    </div>
+  ) : (
+    <p class="text-muted" style="margin-bottom:32px">Sin solapamientos detectados.</p>
+  )}
+
+  <h2>Líneas de producción sin modelo del roster ({lineasHuerfanas?.length ?? 0})</h2>
+  <p class="text-muted" style="font-size:12px;margin-bottom:8px">
+    Líneas con rol "Modelo" que no se vincularon automáticamente al roster (nombre no matchea exacto).
+    Considera agregar estas personas al roster o ajustar el nombre.
+  </p>
+  {lineasHuerfanas && lineasHuerfanas.length > 0 ? (
+    <div style="margin-bottom:32px">
+      {lineasHuerfanas.map((d: any) => (
+        <div class="card" style="margin-bottom:8px">
+          <strong>{d.nombre_libre}</strong>
+          <small class="text-muted"> · {d.rol} · ${d.cobro_cliente.toLocaleString('es-MX')}</small>
+          <div><small><a href={`/producciones/${d.prod_id}`}>{d.prod_titulo}</a></small></div>
+        </div>
+      ))}
+    </div>
+  ) : (
+    <p class="text-muted">Sin líneas huérfanas detectadas.</p>
+  )}
+</Layout>

@@ -37,7 +37,10 @@ const { results: users } = await db
 <Layout title="Admin" pageTitle="Administración">
   <div class="page-head">
     <h1>Usuarios</h1>
-    <a href="/dashboard" class="btn btn-sm">Volver</a>
+    <div style="display:flex;gap:10px">
+      <a href="/admin/duplicados" class="btn btn-sm">Limpieza de datos</a>
+      <a href="/dashboard" class="btn btn-sm">Volver</a>
+    </div>
   </div>
 
   <p class="text-muted" style="font-size:12px;margin-bottom:24px">
