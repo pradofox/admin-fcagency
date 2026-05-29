@@ -10,7 +10,11 @@
     "db:migrate:local": "for f in migrations/*.sql; do wrangler d1 execute fc-admin --local --file=$f; done",
     "db:migrate:prod": "for f in migrations/*.sql; do wrangler d1 execute fc-admin --remote --file=$f; done",
     "seed:admin": "node scripts/seed-admin.mjs",
-    "migrate:firebase": "node scripts/migrate-from-firebase.mjs > migration-data.sql"
+    "migrate:firebase": "node scripts/migrate-from-firebase.mjs > migration-data.sql",
+    "users": "wrangler d1 execute fc-admin --remote --command=\"SELECT email, nombre, rol, activo FROM users ORDER BY created_at DESC\"",
+    "magic": "node scripts/magic-link.mjs",
+    "logs": "wrangler tail admin-fcagency",
+    "rollback": "wrangler rollback admin-fcagency"
   },
   "dependencies": {
     "astro": "^4.16.0",
