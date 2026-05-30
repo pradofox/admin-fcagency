@@ -36,6 +36,56 @@ if (search) {
 
 const totalActivos = await db.prepare("SELECT COUNT(*) as c FROM modelos WHERE estado = 'activo'").first<{ c: number }>();
 const totalAspirantes = await db.prepare("SELECT COUNT(*) as c FROM modelos WHERE estado = 'aspirante'").first<{ c: number }>();
+
+// ── Resumen de perfiles completos (solo activas) ──────────────────────────
+// Cuenta para cada modelo activa cuántos de los 18 campos del perfil están
+// rellenos. Mismos campos que se usan en /modelos/[id].astro para que el
+// "% perfil completo" individual y el promedio aquí coincidan.
+const perfilStats = await db
+  .prepare(
+    `SELECT
+       COUNT(*) AS total,
+       AVG(c) AS promedio,
+       SUM(CASE WHEN c >= 14 THEN 1 ELSE 0 END) AS altas,
+       SUM(CASE WHEN c BETWEEN 9 AND 13 THEN 1 ELSE 0 END) AS medias,
+       SUM(CASE WHEN c < 9 THEN 1 ELSE 0 END) AS bajas
+     FROM (
+       SELECT (
+         (CASE WHEN email      IS NOT NULL AND email      != '' THEN 1 ELSE 0 END) +
+         (CASE WHEN whatsapp   IS NOT NULL AND whatsapp   != '' THEN 1 ELSE 0 END) +
+         (CASE WHEN instagram  IS NOT NULL AND instagram  != '' THEN 1 ELSE 0 END) +
+         (CASE WHEN cumpleanos IS NOT NULL AND cumpleanos != '' THEN 1 ELSE 0 END) +
+         (CASE WHEN genero     IS NOT NULL AND genero     != '' THEN 1 ELSE 0 END) +
+         (CASE WHEN ciudad     IS NOT NULL AND ciudad     != '' THEN 1 ELSE 0 END) +
+         (CASE WHEN cabello    IS NOT NULL AND cabello    != '' THEN 1 ELSE 0 END) +
+         (CASE WHEN ojos       IS NOT NULL AND ojos       != '' THEN 1 ELSE 0 END) +
+         (CASE WHEN talentos   IS NOT NULL AND talentos   != '' THEN 1 ELSE 0 END) +
+         (CASE WHEN drive_folder IS NOT NULL AND drive_folder != '' THEN 1 ELSE 0 END) +
+         (CASE WHEN estatura_cm IS NOT NULL THEN 1 ELSE 0 END) +
+         (CASE WHEN busto_cm    IS NOT NULL THEN 1 ELSE 0 END) +
+         (CASE WHEN cintura_cm  IS NOT NULL THEN 1 ELSE 0 END) +
+         (CASE WHEN cadera_cm   IS NOT NULL THEN 1 ELSE 0 END) +
+         (CASE WHEN calzado_mx  IS NOT NULL THEN 1 ELSE 0 END) +
+         (CASE WHEN polas        = 1 THEN 1 ELSE 0 END) +
+         (CASE WHEN book         = 1 THEN 1 ELSE 0 END) +
+         (CASE WHEN videocasting = 1 THEN 1 ELSE 0 END)
+       ) AS c
+       FROM modelos WHERE estado = 'activo'
+     )`
+  )
+  .first<{ total: number; promedio: number; altas: number; medias: number; bajas: number }>();
+
+const totalCamposPerfil = 18;
+const pctPromedio = perfilStats?.promedio
+  ? Math.round((perfilStats.promedio / totalCamposPerfil) * 100)
+  : 0;
+const totalP = perfilStats?.total ?? 0;
+const altas = perfilStats?.altas ?? 0;
+const medias = perfilStats?.medias ?? 0;
+const bajas = perfilStats?.bajas ?? 0;
+const pctAltas  = totalP ? (altas  / totalP) * 100 : 0;
+const pctMedias = totalP ? (medias / totalP) * 100 : 0;
+const pctBajas  = totalP ? (bajas  / totalP) * 100 : 0;
 ---
 
 <Layout title="Modelos" pageTitle="Modelos">
@@ -48,6 +98,42 @@ const totalAspirantes = await db.prepare("SELECT COUNT(*) as c FROM modelos WHER
       {canEdit(user) && <a href="/modelos/nuevo" class="btn btn-primary">+ Nueva</a>}
     </div>
   </div>
+
+  {totalP > 0 && (
+    <div style="background:var(--bg-2);border:1px solid var(--border);padding:14px 16px;border-radius:4px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;gap:12px;flex-wrap:wrap">
+        <div style="font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">
+          Perfiles completos (de {totalP} activas)
+        </div>
+        <div class="mono" style="font-size:13px">
+          <span style={`color:${pctPromedio >= 80 ? 'var(--text-ok,#4ade80)' : pctPromedio >= 50 ? '#e9b949' : 'var(--danger,#e25555)'}`}>{pctPromedio}%</span>
+          <span class="text-muted" style="font-size:11px">&nbsp;promedio</span>
+        </div>
+      </div>
+      <div style="height:10px;border-radius:3px;overflow:hidden;display:flex;background:var(--bg-3,#1a1a1a)">
+        {altas  > 0 && <div title={`${altas} con perfil ≥80%`} style={`flex:0 0 ${pctAltas}%;background:var(--text-ok,#4ade80);opacity:.85`}></div>}
+        {medias > 0 && <div title={`${medias} con perfil 50–79%`} style={`flex:0 0 ${pctMedias}%;background:#e9b949;opacity:.85`}></div>}
+        {bajas  > 0 && <div title={`${bajas} con perfil <50%`} style={`flex:0 0 ${pctBajas}%;background:var(--danger,#e25555);opacity:.85`}></div>}
+      </div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:11px">
+        <span style="display:flex;align-items:center;gap:5px">
+          <span style="width:10px;height:10px;border-radius:2px;background:var(--text-ok,#4ade80);opacity:.85;display:inline-block"></span>
+          <span class="text-muted">≥80% completo</span>
+          <span class="mono">{altas}</span>
+        </span>
+        <span style="display:flex;align-items:center;gap:5px">
+          <span style="width:10px;height:10px;border-radius:2px;background:#e9b949;opacity:.85;display:inline-block"></span>
+          <span class="text-muted">50–79%</span>
+          <span class="mono">{medias}</span>
+        </span>
+        <span style="display:flex;align-items:center;gap:5px">
+          <span style="width:10px;height:10px;border-radius:2px;background:var(--danger,#e25555);opacity:.85;display:inline-block"></span>
+          <span class="text-muted">&lt;50%</span>
+          <span class="mono">{bajas}</span>
+        </span>
+      </div>
+    </div>
+  )}
 
   <form method="GET" action="/modelos" class="toolbar">
     <input
