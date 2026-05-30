@@ -1,12 +1,13 @@
 ---
 import Layout from '../../components/Layout.astro';
-import { requireUser, canEdit } from '../../lib/session';
+import { requireUser, canEdit, isAdmin } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 import { formatFecha } from '../../lib/fechas';
 
 const user = requireUser(Astro);
 const editable = canEdit(user);
+const verMargen = isAdmin(user);
 const db = getDB(Astro);
 const { id } = Astro.params;
 
@@ -338,22 +339,31 @@ const ESTADOS_FLUJO = [
   {error  && <p class="text-danger" style="margin-bottom:16px">{error}</p>}
   {msgOk  && <p class="text-ok"    style="margin-bottom:16px">{msgOk}</p>}
 
-  {/* ── Resumen financiero ── */}
+  {/* ── Resumen financiero (utilidad solo admin) ── */}
   {totalCobrado > 0 && (
-    <div class="row" style="margin-bottom:24px">
-      <div class="col card" style="border-left:3px solid var(--gold)">
-        <div class="card-meta">Total cobrado al cliente</div>
-        <div class="card-title mono" style="color:var(--gold)">{fmt(totalCobrado)}</div>
+    verMargen ? (
+      <div class="row" style="margin-bottom:24px">
+        <div class="col card" style="border-left:3px solid var(--gold)">
+          <div class="card-meta">Total cobrado al cliente</div>
+          <div class="card-title mono" style="color:var(--gold)">{fmt(totalCobrado)}</div>
+        </div>
+        <div class="col card" style="border-left:3px solid var(--danger,#e25555)">
+          <div class="card-meta">Pago a proveedores</div>
+          <div class="card-title mono" style="color:var(--danger,#e25555)">{fmt(totalProveedores)}</div>
+        </div>
+        <div class="col card" style="border-left:3px solid var(--text-ok,#4ade80)">
+          <div class="card-meta">Ganancia FC ({margenPct}%)</div>
+          <div class="card-title mono text-ok">{fmt(totalUtilidad)}</div>
+        </div>
       </div>
-      <div class="col card" style="border-left:3px solid var(--danger,#e25555)">
-        <div class="card-meta">Pago a proveedores</div>
-        <div class="card-title mono" style="color:var(--danger,#e25555)">{fmt(totalProveedores)}</div>
+    ) : (
+      <div class="row" style="margin-bottom:24px">
+        <div class="col card" style="border-left:3px solid var(--gold)">
+          <div class="card-meta">Total cobrado al cliente</div>
+          <div class="card-title mono" style="color:var(--gold)">{fmt(totalCobrado)}</div>
+        </div>
       </div>
-      <div class="col card" style="border-left:3px solid var(--text-ok,#4ade80)">
-        <div class="card-meta">Utilidad neta ({margenPct}%)</div>
-        <div class="card-title mono text-ok">{fmt(totalUtilidad)}</div>
-      </div>
-    </div>
+    )
   )}
 
   {/* ── Acciones de estado ── */}

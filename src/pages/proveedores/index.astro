@@ -1,13 +1,14 @@
 ---
 import Layout from '../../components/Layout.astro';
 import EmptyState from '../../components/EmptyState.astro';
-import { requireUser, canEdit } from '../../lib/session';
+import { requireUser, canEdit, isAdmin } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 
-const user     = requireUser(Astro);
-const editable = canEdit(user);
-const db       = getDB(Astro);
+const user      = requireUser(Astro);
+const editable  = canEdit(user);
+const verMargen = isAdmin(user);
+const db        = getDB(Astro);
 
 const ROLES = [
   'Fotografía', 'Video', 'Modelo', 'Maquillaje', 'Peinado', 'Styling',
@@ -190,6 +191,7 @@ const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
               {items.map((c: any) => {
                 const margen   = c.precio_mxn - (c.total_repartido ?? 0);
                 const pctMar   = c.precio_mxn > 0 ? Math.round(margen / c.precio_mxn * 100) : 0;
+                const sinReparto = (c.num_proveedores ?? 0) === 0;
                 return (
                   <a href={`/proveedores/${c.id}`} class="card"
                      style="display:block;color:inherit;text-decoration:none">
@@ -201,16 +203,18 @@ const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
                         <span class="text-muted" style="font-size:11px">{c.num_proveedores} proveedor{c.num_proveedores !== 1 ? 'es' : ''}</span>
                       )}
                     </div>
-                    {c.num_proveedores > 0 && (
+                    {/* Margen / % ganancia — solo admin */}
+                    {verMargen && c.precio_mxn > 0 && (
                       <div style="margin-top:6px">
-                        {/* Barra de reparto */}
                         <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden">
                           <div style={`height:100%;width:${100-pctMar}%;background:var(--danger,#e25555)`}></div>
                         </div>
                         <div style="display:flex;justify-content:space-between;font-size:10px;margin-top:3px">
-                          <span class="text-muted">proveedores {fmt(c.total_repartido)}</span>
+                          <span class="text-muted">
+                            {sinReparto ? 'sin reparto definido' : `proveedores ${fmt(c.total_repartido)}`}
+                          </span>
                           <span style={`color:${pctMar >= 15 ? 'var(--text-ok,#4ade80)' : 'var(--danger)'}`}>
-                            margen {pctMar}%
+                            ganancia {pctMar}%
                           </span>
                         </div>
                       </div>

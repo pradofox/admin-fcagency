@@ -1,12 +1,13 @@
 ---
 import Layout from '../../components/Layout.astro';
-import { requireUser, canEdit } from '../../lib/session';
+import { requireUser, canEdit, isAdmin } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 
-const user     = requireUser(Astro);
-const editable = canEdit(user);
-const db       = getDB(Astro);
+const user      = requireUser(Astro);
+const editable  = canEdit(user);
+const verMargen = isAdmin(user);
+const db        = getDB(Astro);
 const { id }   = Astro.params;
 
 const ROLES = [
@@ -130,26 +131,35 @@ const editRepartoId = Astro.url.searchParams.get('editar');
   {error && <p class="text-danger" style="margin-bottom:16px">{error}</p>}
   {msgOk && <p class="text-ok"    style="margin-bottom:16px">{msgOk}</p>}
 
-  {/* ── Resumen financiero ── */}
-  <div class="row" style="margin-bottom:28px">
-    <div class="col card" style="border-left:3px solid var(--gold)">
-      <div class="card-meta">Cobro al cliente</div>
-      <div class="card-title mono" style="color:var(--gold)">{fmt(concepto.precio_mxn)}</div>
-    </div>
-    <div class="col card" style="border-left:3px solid var(--danger,#e25555)">
-      <div class="card-meta">Total a proveedores</div>
-      <div class="card-title mono" style="color:var(--danger,#e25555)">{fmt(totalRepartido)}</div>
-    </div>
-    <div class="col card" style={`border-left:3px solid ${margen >= 0 ? 'var(--text-ok,#4ade80)' : 'var(--danger,#e25555)'}`}>
-      <div class="card-meta">Margen FC Agency</div>
-      <div class="card-title mono" style={`color:${margen >= 0 ? 'var(--text-ok,#4ade80)' : 'var(--danger,#e25555)'}`}>
-        {fmt(margen)} <span style="font-size:12px;opacity:.7">({Math.round(pctMargen)}%)</span>
+  {/* ── Resumen financiero (margen solo admin) ── */}
+  {verMargen ? (
+    <div class="row" style="margin-bottom:28px">
+      <div class="col card" style="border-left:3px solid var(--gold)">
+        <div class="card-meta">Cobro al cliente</div>
+        <div class="card-title mono" style="color:var(--gold)">{fmt(concepto.precio_mxn)}</div>
+      </div>
+      <div class="col card" style="border-left:3px solid var(--danger,#e25555)">
+        <div class="card-meta">Total a proveedores</div>
+        <div class="card-title mono" style="color:var(--danger,#e25555)">{fmt(totalRepartido)}</div>
+      </div>
+      <div class="col card" style={`border-left:3px solid ${margen >= 0 ? 'var(--text-ok,#4ade80)' : 'var(--danger,#e25555)'}`}>
+        <div class="card-meta">Ganancia FC Agency</div>
+        <div class="card-title mono" style={`color:${margen >= 0 ? 'var(--text-ok,#4ade80)' : 'var(--danger,#e25555)'}`}>
+          {fmt(margen)} <span style="font-size:12px;opacity:.7">({Math.round(pctMargen)}%)</span>
+        </div>
       </div>
     </div>
-  </div>
+  ) : (
+    <div class="row" style="margin-bottom:28px">
+      <div class="col card" style="border-left:3px solid var(--gold)">
+        <div class="card-meta">Cobro al cliente</div>
+        <div class="card-title mono" style="color:var(--gold)">{fmt(concepto.precio_mxn)}</div>
+      </div>
+    </div>
+  )}
 
-  {/* ── Barra visual de reparto ── */}
-  {(repartos?.length ?? 0) > 0 && (
+  {/* ── Barra visual de reparto (solo admin) ── */}
+  {verMargen && (repartos?.length ?? 0) > 0 && (
     <div style="margin-bottom:28px">
       <div style="height:18px;border-radius:3px;overflow:hidden;display:flex;gap:1px">
         {(repartos as any[]).map((r, i) => {
@@ -185,10 +195,10 @@ const editRepartoId = Astro.url.searchParams.get('editar');
     </div>
   )}
 
-  {/* ── Tabla de reparto ── */}
-  <h2 style="margin-bottom:12px">Reparto a proveedores</h2>
+  {/* ── Tabla de reparto (solo admin) ── */}
+  {verMargen && <h2 style="margin-bottom:12px">Reparto a proveedores</h2>}
 
-  {(repartos?.length ?? 0) > 0 && (
+  {verMargen && (repartos?.length ?? 0) > 0 && (
     <div class="table-card" style="margin-bottom:16px">
       <table>
         <thead>
@@ -264,12 +274,12 @@ const editRepartoId = Astro.url.searchParams.get('editar');
     </div>
   )}
 
-  {!(repartos?.length) && (
+  {verMargen && !(repartos?.length) && (
     <p class="text-muted" style="margin-bottom:16px">Sin proveedores asignados aún. Agrega el reparto abajo.</p>
   )}
 
-  {/* ── Agregar proveedor al reparto ── */}
-  {editable && (
+  {/* ── Agregar proveedor al reparto (solo admin) ── */}
+  {verMargen && editable && (
     <details style="background:var(--bg-2);border:1px solid var(--border);padding:16px;margin-bottom:32px"
              open={!(repartos?.length)}>
       <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">
