@@ -36,6 +36,28 @@ if (search) {
 
 const totalActivos = await db.prepare("SELECT COUNT(*) as c FROM modelos WHERE estado = 'activo'").first<{ c: number }>();
 const totalAspirantes = await db.prepare("SELECT COUNT(*) as c FROM modelos WHERE estado = 'aspirante'").first<{ c: number }>();
+const totalGeneral = await db.prepare("SELECT COUNT(*) as c FROM modelos").first<{ c: number }>();
+
+// Material = polas + book + videocasting. "Completo" = los 3 marcados.
+// Cuenta solo entre activas porque las archivadas/pausa no son operativas.
+const materialStats = await db
+  .prepare(
+    `SELECT
+       SUM(CASE WHEN polas = 1 AND book = 1 AND videocasting = 1 THEN 1 ELSE 0 END) AS completas,
+       COUNT(*) AS total
+     FROM modelos WHERE estado = 'activo'`
+  )
+  .first<{ completas: number; total: number }>();
+
+const matCompletas = materialStats?.completas ?? 0;
+const matTotal     = materialStats?.total ?? 0;
+const matFaltantes = matTotal - matCompletas;
+const pctMatCompletas = matTotal ? Math.round((matCompletas / matTotal) * 100) : 0;
+const pctMatFaltantes = matTotal ? Math.round((matFaltantes / matTotal) * 100) : 0;
+
+const totalGen = totalGeneral?.c ?? 0;
+const activasN = totalActivos?.c ?? 0;
+const pctActivas = totalGen ? Math.round((activasN / totalGen) * 100) : 0;
 
 // ── Resumen de perfiles completos (solo activas) ──────────────────────────
 // Cuenta para cada modelo activa cuántos de los 18 campos del perfil están
@@ -96,6 +118,25 @@ const pctBajas  = totalP ? (bajas  / totalP) * 100 : 0;
       <a href="/modelos/material" class="btn btn-sm">Material</a>
       <a href="/api/modelos/export" class="btn btn-sm">Exportar CSV</a>
       {canEdit(user) && <a href="/modelos/nuevo" class="btn btn-primary">+ Nueva</a>}
+    </div>
+  </div>
+
+  {/* ── Stats globales: activas / material faltante ── */}
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:12px">
+    <div style="background:var(--bg-2);border:1px solid var(--border);border-left:3px solid var(--text-ok,#4ade80);padding:12px 14px;border-radius:4px">
+      <div style="font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Modelos activas</div>
+      <div style="display:flex;align-items:baseline;gap:8px;margin-top:4px">
+        <span class="mono" style="font-size:22px;color:var(--text-ok,#4ade80)">{pctActivas}%</span>
+        <span class="text-muted" style="font-size:12px">{activasN} de {totalGen} en el roster</span>
+      </div>
+    </div>
+    <div style={`background:var(--bg-2);border:1px solid var(--border);border-left:3px solid ${pctMatFaltantes >= 50 ? 'var(--danger,#e25555)' : pctMatFaltantes >= 25 ? '#e9b949' : 'var(--text-ok,#4ade80)'};padding:12px 14px;border-radius:4px`}>
+      <div style="font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Material faltante</div>
+      <div style="display:flex;align-items:baseline;gap:8px;margin-top:4px">
+        <span class="mono" style={`font-size:22px;color:${pctMatFaltantes >= 50 ? 'var(--danger,#e25555)' : pctMatFaltantes >= 25 ? '#e9b949' : 'var(--text-ok,#4ade80)'}`}>{pctMatFaltantes}%</span>
+        <span class="text-muted" style="font-size:12px">{matFaltantes} de {matTotal} activas</span>
+      </div>
+      <div class="text-muted" style="font-size:10px;margin-top:2px">{matCompletas} ya tienen polas + book + videocasting</div>
     </div>
   </div>
 
