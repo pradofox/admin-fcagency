@@ -4,6 +4,7 @@ import ModeloForm from '../../components/modelos/ModeloForm.astro';
 import { requireUser } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
+import { logAudit } from '../../lib/audit';
 
 const user = requireUser(Astro);
 const db = getDB(Astro);
@@ -60,6 +61,7 @@ if (Astro.request.method === 'POST') {
         ts
       )
       .run();
+    await logAudit(db, { user, accion: 'create', entidad: 'modelo', entidad_id: id, entidad_label: nombre });
     return Astro.redirect(`/modelos/${id}`);
   }
 }

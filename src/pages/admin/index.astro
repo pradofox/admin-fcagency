@@ -2,8 +2,9 @@
 import Layout from '../../components/Layout.astro';
 import { requireAdmin } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
+import { logAudit } from '../../lib/audit';
 
-requireAdmin(Astro);
+const user = requireAdmin(Astro);
 const db = getDB(Astro);
 
 let mensaje: string | null = null;
@@ -13,30 +14,38 @@ if (Astro.request.method === 'POST') {
   const action = form.get('_action') as string;
   const userId = form.get('user_id') as string;
 
+  const target = await db.prepare('SELECT email, nombre, rol, activo FROM users WHERE id = ?').bind(userId).first<{ email: string; nombre: string; rol: string; activo: number }>();
+  const label = target ? `${target.nombre} (${target.email})` : null;
+
   if (action === 'change_rol') {
     const nuevoRol = form.get('rol') as string;
     if (['admin', 'editor', 'viewer'].includes(nuevoRol)) {
       await db.prepare('UPDATE users SET rol = ?, updated_at = ? WHERE id = ?').bind(nuevoRol, now(), userId).run();
+      await logAudit(db, { user, accion: 'rol_change', entidad: 'usuario', entidad_id: userId, entidad_label: label, payload: { de: target?.rol, a: nuevoRol } });
       mensaje = 'Rol actualizado.';
     }
   } else if (action === 'toggle_activo') {
     const nuevo = form.get('nuevo') as string;
-    await db.prepare('UPDATE users SET activo = ?, updated_at = ? WHERE id = ?').bind(nuevo === '1' ? 1 : 0, now(), userId).run();
+    const activoNuevo = nuevo === '1' ? 1 : 0;
+    await db.prepare('UPDATE users SET activo = ?, updated_at = ? WHERE id = ?').bind(activoNuevo, now(), userId).run();
+    await logAudit(db, { user, accion: 'state_change', entidad: 'usuario', entidad_id: userId, entidad_label: label, payload: { activo: activoNuevo } });
     mensaje = 'Estado actualizado.';
   } else if (action === 'delete_sessions') {
     await db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId).run();
+    await logAudit(db, { user, accion: 'logout', entidad: 'sesion', entidad_id: userId, entidad_label: label, payload: { motivo: 'cerrar_sesiones_admin' } });
     mensaje = 'Sesiones cerradas.';
   } else if (action === 'assign_marcas') {
     const marcasSel = form.getAll('marca').map((v) => String(v)).filter(Boolean);
     await db.prepare('UPDATE users SET marcas = ?, updated_at = ? WHERE id = ?')
       .bind(JSON.stringify(marcasSel), now(), userId).run();
+    await logAudit(db, { user, accion: 'update', entidad: 'usuario', entidad_id: userId, entidad_label: label, payload: { marcas: marcasSel } });
     mensaje = 'Marcas asignadas. El usuario debe reiniciar sesión para aplicar el cambio.';
   }
 }
 
 const { results: users } = await db
-  .prepare('SELECT id, email, nombre, rol, marcas, activo, created_at FROM users ORDER BY created_at DESC')
-  .all<{ id: string; email: string; nombre: string; rol: string; marcas: string | null; activo: number; created_at: number }>();
+  .prepare('SELECT id, email, nombre, rol, marcas, activo, created_at, ultimo_login FROM users ORDER BY created_at DESC')
+  .all<{ id: string; email: string; nombre: string; rol: string; marcas: string | null; activo: number; created_at: number; ultimo_login: number | null }>();
 
 const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<{ id: string; nombre: string }>()).results ?? [];
 
@@ -52,6 +61,7 @@ function nombreMarca(mid: string): string {
   <div class="page-head">
     <h1>Usuarios</h1>
     <div style="display:flex;gap:10px">
+      <a href="/admin/auditoria" class="btn btn-sm">Auditoría</a>
       <a href="/admin/duplicados" class="btn btn-sm">Limpieza de datos</a>
       <a href="/dashboard" class="btn btn-sm">Volver</a>
     </div>
@@ -79,6 +89,7 @@ function nombreMarca(mid: string): string {
           <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Marcas (scope)</th>
           <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Estado</th>
           <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Creado</th>
+          <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Último login</th>
           <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Acciones</th>
         </tr>
       </thead>
@@ -139,6 +150,9 @@ function nombreMarca(mid: string): string {
             </td>
             <td style="padding:12px 10px;color:var(--text-2);font-size:12px">
               {new Date(u.created_at).toLocaleDateString('es-MX')}
+            </td>
+            <td style="padding:12px 10px;color:var(--text-2);font-size:12px">
+              {u.ultimo_login ? new Date(u.ultimo_login).toLocaleDateString('es-MX') : <span class="text-muted">—</span>}
             </td>
             <td style="padding:12px 10px">
               <form method="POST" action="/admin" onsubmit="return confirm('¿Cerrar todas las sesiones de este usuario?')" style="display:inline">

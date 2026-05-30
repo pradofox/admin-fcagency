@@ -88,6 +88,11 @@ export async function consumeTokenAndCreateSession(
     .bind(sessionId, user.id, ts + SESSION_EXPIRY_MS, ts)
     .run();
 
+  // Snapshot del ultimo login (best-effort, ignora si la columna no existe).
+  try {
+    await db.prepare('UPDATE users SET ultimo_login = ? WHERE id = ?').bind(ts, user.id).run();
+  } catch { /* ignore */ }
+
   return sessionId;
 }
 

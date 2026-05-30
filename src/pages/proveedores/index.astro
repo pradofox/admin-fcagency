@@ -4,6 +4,7 @@ import EmptyState from '../../components/EmptyState.astro';
 import { requireUser, canEdit, isAdmin } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
+import { logAudit } from '../../lib/audit';
 
 const user      = requireUser(Astro);
 const editable  = canEdit(user);
@@ -40,6 +41,7 @@ if (Astro.request.method === 'POST' && editable) {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
       .bind(id, nombre, get('rol'), get('categoria'), get('descripcion'), precio, horaAd, maxDesc, porHora, get('notas'), ts, ts)
       .run();
+    await logAudit(db, { user, accion: 'create', entidad: 'concepto', entidad_id: id, entidad_label: nombre, payload: { precio_mxn: precio } });
     return Astro.redirect(`/proveedores/${id}`);
   }
 }

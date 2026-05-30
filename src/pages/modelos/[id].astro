@@ -4,6 +4,7 @@ import ModeloForm from '../../components/modelos/ModeloForm.astro';
 import { requireUser, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { formatFecha, calcularEdad, cumpleCorto, diasAlCumple } from '../../lib/fechas';
+import { logAudit } from '../../lib/audit';
 
 const user = requireUser(Astro);
 const editable = canEdit(user);
@@ -17,7 +18,9 @@ if (Astro.request.method === 'POST' && editable) {
   const form = await Astro.request.formData();
   const method = form.get('_method');
   if (method === 'DELETE') {
+    const prev = await db.prepare('SELECT nombre FROM modelos WHERE id = ?').bind(id).first<{ nombre: string }>();
     await db.prepare('DELETE FROM modelos WHERE id = ?').bind(id).run();
+    await logAudit(db, { user, accion: 'delete', entidad: 'modelo', entidad_id: id, entidad_label: prev?.nombre ?? null });
     return Astro.redirect('/modelos');
   }
   // Update
@@ -74,6 +77,7 @@ if (Astro.request.method === 'POST' && editable) {
         id
       )
       .run();
+    await logAudit(db, { user, accion: 'update', entidad: 'modelo', entidad_id: id, entidad_label: nombre });
     saved = true;
   }
 }

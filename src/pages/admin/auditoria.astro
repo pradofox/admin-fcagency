@@ -1,0 +1,171 @@
+---
+import Layout from '../../components/Layout.astro';
+import { requireAdmin } from '../../lib/session';
+import { getDB } from '../../lib/db';
+
+requireAdmin(Astro);
+const db = getDB(Astro);
+
+const params = Astro.url.searchParams;
+const filtroUser    = params.get('user') ?? '';
+const filtroEntidad = params.get('entidad') ?? '';
+const filtroAccion  = params.get('accion') ?? '';
+const limit         = Math.min(500, Math.max(20, Number(params.get('limit') ?? 100)));
+
+const where: string[] = [];
+const binds: any[] = [];
+if (filtroUser)    { where.push('user_id = ?');  binds.push(filtroUser); }
+if (filtroEntidad) { where.push('entidad = ?');  binds.push(filtroEntidad); }
+if (filtroAccion)  { where.push('accion = ?');   binds.push(filtroAccion); }
+
+const sql = `SELECT id, user_email, user_nombre, accion, entidad, entidad_id, entidad_label, payload, created_at
+             FROM audit_log
+             ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+             ORDER BY created_at DESC
+             LIMIT ?`;
+binds.push(limit);
+
+const { results: eventos } = await db.prepare(sql).bind(...binds).all<any>();
+
+// Listas para filtros (usuarios y entidades existentes)
+const { results: usuarios } = await db
+  .prepare('SELECT id, nombre, email FROM users ORDER BY nombre')
+  .all<{ id: string; nombre: string; email: string }>();
+
+const ENTIDADES = ['modelo','produccion','cotizacion','concepto','reparto','cliente','contacto','casting','brief','pieza','usuario','sesion','pago','accion_calendario'];
+const ACCIONES  = ['create','update','delete','state_change','rol_change','convertir','login','logout'];
+
+function fmtTs(ts: number) {
+  const d = new Date(ts);
+  const f = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${f(d.getMonth()+1)}-${f(d.getDate())} ${f(d.getHours())}:${f(d.getMinutes())}`;
+}
+
+const colorAccion: Record<string, string> = {
+  create:       'var(--text-ok,#4ade80)',
+  update:       '#e9b949',
+  delete:       'var(--danger,#e25555)',
+  state_change: '#60a5fa',
+  rol_change:   '#c084fc',
+  convertir:    'var(--gold)',
+  login:        'var(--text-2)',
+  logout:       'var(--text-2)',
+};
+
+function rutaEntidad(entidad: string, id: string | null): string | null {
+  if (!id) return null;
+  const map: Record<string, string> = {
+    modelo: `/modelos/${id}`,
+    produccion: `/producciones/${id}`,
+    cotizacion: `/cotizaciones/${id}`,
+    concepto: `/proveedores/${id}`,
+    cliente: `/clientes/${id}`,
+    contacto: `/contactos/${id}`,
+    casting: `/castings/${id}`,
+    brief: `/briefs/${id}`,
+    usuario: `/admin`,
+  };
+  return map[entidad] ?? null;
+}
+---
+
+<Layout title="Auditoría" pageTitle="Auditoría">
+  <div class="page-head">
+    <div>
+      <h1>Auditoría</h1>
+      <small class="text-muted">Todos los movimientos importantes de la plataforma, con quién y cuándo.</small>
+    </div>
+    <div style="display:flex;gap:10px">
+      <a href="/admin" class="btn btn-sm">← Usuarios</a>
+    </div>
+  </div>
+
+  {/* Filtros */}
+  <form method="GET" action="/admin/auditoria"
+        style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;align-items:end;background:var(--bg-2);border:1px solid var(--border);padding:14px;border-radius:4px">
+    <div>
+      <label class="label">Usuario</label>
+      <select class="select" name="user">
+        <option value="">— todos —</option>
+        {usuarios?.map((u) => (
+          <option value={u.id} selected={filtroUser === u.id}>{u.nombre} ({u.email})</option>
+        ))}
+      </select>
+    </div>
+    <div>
+      <label class="label">Entidad</label>
+      <select class="select" name="entidad">
+        <option value="">— todas —</option>
+        {ENTIDADES.map((e) => <option value={e} selected={filtroEntidad === e}>{e}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label">Acción</label>
+      <select class="select" name="accion">
+        <option value="">— todas —</option>
+        {ACCIONES.map((a) => <option value={a} selected={filtroAccion === a}>{a}</option>)}
+      </select>
+    </div>
+    <div>
+      <label class="label">Mostrar últimos</label>
+      <select class="select" name="limit">
+        {[50, 100, 200, 500].map((n) => <option value={n} selected={limit === n}>{n}</option>)}
+      </select>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Aplicar</button>
+    {(filtroUser || filtroEntidad || filtroAccion) && (
+      <a href="/admin/auditoria" class="btn btn-sm">Limpiar</a>
+    )}
+  </form>
+
+  <p class="text-muted" style="font-size:12px;margin-bottom:8px">
+    {eventos?.length ?? 0} eventos mostrados (orden cronológico inverso).
+  </p>
+
+  {eventos && eventos.length > 0 ? (
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border);text-align:left">
+            <th style="padding:8px 10px;font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);white-space:nowrap">Cuándo</th>
+            <th style="padding:8px 10px;font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Quién</th>
+            <th style="padding:8px 10px;font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Acción</th>
+            <th style="padding:8px 10px;font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Entidad</th>
+            <th style="padding:8px 10px;font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Qué</th>
+            <th style="padding:8px 10px;font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Detalles</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(eventos as any[]).map((e) => {
+            const ruta = rutaEntidad(e.entidad, e.entidad_id);
+            return (
+              <tr style="border-bottom:1px solid var(--border)">
+                <td class="mono text-muted" style="padding:8px 10px;white-space:nowrap;font-size:11px">{fmtTs(e.created_at)}</td>
+                <td style="padding:8px 10px">
+                  {e.user_nombre ?? <span class="text-muted">—</span>}
+                  {e.user_email && <div class="text-muted" style="font-size:10px">{e.user_email}</div>}
+                </td>
+                <td style="padding:8px 10px">
+                  <span class="chip" style={`font-size:10px;color:${colorAccion[e.accion] ?? ''}`}>{e.accion}</span>
+                </td>
+                <td style="padding:8px 10px">
+                  <span class="text-muted">{e.entidad}</span>
+                </td>
+                <td style="padding:8px 10px">
+                  {ruta
+                    ? <a href={ruta} style="color:inherit">{e.entidad_label ?? e.entidad_id ?? '—'}</a>
+                    : <span>{e.entidad_label ?? e.entidad_id ?? '—'}</span>}
+                </td>
+                <td style="padding:8px 10px;font-family:var(--font-mono);font-size:11px;color:var(--text-2);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={e.payload ?? ''}>
+                  {e.payload ?? '—'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  ) : (
+    <p class="text-muted" style="text-align:center;padding:40px">Sin eventos que coincidan con los filtros.</p>
+  )}
+</Layout>

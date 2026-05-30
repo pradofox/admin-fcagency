@@ -1,6 +1,7 @@
 ---
 import Layout from '../../components/Layout.astro';
 import { requireUser, canEdit, isAdmin } from '../../lib/session';
+import { logAudit } from '../../lib/audit';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 import { formatFecha } from '../../lib/fechas';
@@ -28,7 +29,9 @@ if (Astro.request.method === 'POST' && editable) {
   // ── Cambiar estado ─────────────────────────────────────────────────────────
   if (action === 'set_estado') {
     const estado = form.get('estado') as string;
+    const prev = await db.prepare('SELECT numero, titulo, estado FROM cotizaciones WHERE id = ?').bind(id).first<{ numero: string; titulo: string; estado: string }>();
     await db.prepare('UPDATE cotizaciones SET estado = ?, updated_at = ? WHERE id = ?').bind(estado, now(), id).run();
+    await logAudit(db, { user, accion: 'state_change', entidad: 'cotizacion', entidad_id: id, entidad_label: prev ? `${prev.numero} ${prev.titulo}` : null, payload: { de: prev?.estado, a: estado } });
     return Astro.redirect(`/cotizaciones/${id}`);
   }
 
@@ -224,6 +227,7 @@ if (Astro.request.method === 'POST' && editable) {
         .prepare("UPDATE cotizaciones SET estado = 'convertida', produccion_id = ?, updated_at = ? WHERE id = ?")
         .bind(prodId, ts, id).run();
 
+      await logAudit(db, { user, accion: 'convertir', entidad: 'cotizacion', entidad_id: id, entidad_label: null, payload: { produccion_id: prodId } });
       return Astro.redirect(`/producciones/${prodId}`);
     }
   }
