@@ -24,17 +24,18 @@ Datos en producción al 2026-05-28:
 
 ---
 
-## 1.5 — Estado actual (2026-05-29)
+## 1.5 — Estado actual (2026-05-29 fin del día)
 
-**main:** estable en commit `0fb12e1` — "Cotizador estilo hoja MATRIZ: catálogo con backup de precios FC". Catálogo de conceptos completo con backup de precios.
+**main:** estable y deployado en producción. Último commit relevante: `eb3b6a8`.
 
-**Branch activa pendiente:** `wip/horas-por-servicio`
-- Trabajo a medias: agregar flag `por_hora` a `conceptos_servicio` para que el campo "Horas" del cotizador solo aplique a conceptos cobrados por hora (hora de estudio, modelo editorial, hora extra de maquillaje, etc.) y no a paquetes/membresías.
-- Incluye: `migrations/0041_concepto_por_hora.sql` + cambios parciales en `src/pages/cotizaciones/[id].astro` y `src/pages/proveedores/index.astro`.
-- Estado: NO mergear a main hasta revisar y completar la lógica UI. La migración SQL ya marca los conceptos por hora correctos de la matriz (mtz-02, 03, 05, 06, 08, 09, 11, 12, 16, 17).
-- Para retomar: `git fetch && git checkout wip/horas-por-servicio` y completar la lógica de mostrar/aplicar Horas solo cuando `por_hora = 1`.
+Cambios desplegados hoy:
+- **Cotizador — flag `por_hora`** (migrations/0041, 0042): el campo "Horas" del cotizador solo multiplica el subtotal en conceptos marcados como cobrables por hora (modelo editorial, hora extra estudio/maquillaje, renta hora). Para paquetes/membresías el input Horas se oculta. Checkbox "Se cobra por hora" disponible al crear y editar concepto en `/proveedores`.
+- **Cotizador — fix precio mtz-09** ($900 → $800): "Hra extra modelo editorial 1Hra E." tenía typo en el seed; aplicado vía migración 0042.
+- **Modelos — bloque de stats** en `/modelos/[id]`: tres tarjetas arriba del perfil con % de perfil completo (18 campos), total de trabajos (trabajos_modelo + lineas_produccion), y última actualización (timestamp UPDATE + material_actualizado_en).
 
-**Quién está editando ahorita:** Lili (en su Mac, `~/Code/admin-fcagency`). Cuando ella termine, cualquier otra sesión puede continuar desde la branch WIP.
+Branch `wip/horas-por-servicio` ya está mergeada a main. Se puede borrar cuando quieras: `git branch -d wip/horas-por-servicio && git push origin --delete wip/horas-por-servicio`.
+
+No hay trabajo en progreso. Repo limpio.
 
 ---
 
