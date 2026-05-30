@@ -184,18 +184,27 @@ const colorEstado: Record<string, string> = {
 <Layout title={`Editar — ${modelo.nombre}`} pageTitle={modelo.nombre as string}>
   <div class="page-head">
     <div>
-      <h1 style="margin:0">{modelo.nombre}</h1>
       {(() => {
         const edad = calcularEdad(modelo.cumpleanos);
         const corto = cumpleCorto(modelo.cumpleanos);
         const dias = diasAlCumple(modelo.cumpleanos);
-        if (!corto) return null;
         return (
-          <div class="card-meta" style="margin-top:4px">
-            <span class="text-muted">🎂 {corto}</span>
-            {edad != null && <span class="text-muted">{edad} años</span>}
-            {dias != null && dias <= 14 && <span style="color:#e879f9">{dias === 0 ? '¡es hoy!' : dias === 1 ? 'mañana' : `en ${dias} días`}</span>}
-          </div>
+          <>
+            <h1 style="margin:0">
+              {modelo.nombre}
+              {edad != null && (
+                <span style="color:var(--text-2);font-weight:400;font-size:.7em;margin-left:10px;letter-spacing:0">
+                  {edad} años
+                </span>
+              )}
+            </h1>
+            {corto && (
+              <div class="card-meta" style="margin-top:4px">
+                <span class="text-muted">🎂 {corto}</span>
+                {dias != null && dias <= 14 && <span style="color:#e879f9">{dias === 0 ? '¡es hoy!' : dias === 1 ? 'mañana' : `en ${dias} días`}</span>}
+              </div>
+            )}
+          </>
         );
       })()}
     </div>

@@ -17,7 +17,7 @@ if (search) {
   const like = `%${search}%`;
   const r = await db
     .prepare(
-      `SELECT id, nombre, ciudad, instagram, estado FROM modelos
+      `SELECT id, nombre, ciudad, instagram, estado, cumpleanos FROM modelos
        WHERE (nombre LIKE ? OR instagram LIKE ? OR ciudad LIKE ?)
        ORDER BY nombre ASC LIMIT 200`
     )
@@ -27,7 +27,7 @@ if (search) {
 } else {
   const r = await db
     .prepare(
-      'SELECT id, nombre, ciudad, instagram, estado FROM modelos WHERE estado = ? ORDER BY nombre ASC LIMIT 200'
+      'SELECT id, nombre, ciudad, instagram, estado, cumpleanos FROM modelos WHERE estado = ? ORDER BY nombre ASC LIMIT 200'
     )
     .bind(filtroEstado)
     .all<any>();

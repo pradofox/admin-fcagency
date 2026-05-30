@@ -64,12 +64,21 @@ const edadInicial = calcularEdad(modelo.cumpleanos);
     </div>
     <div class="col">
       <label class="label">
-        Cumpleaños
+        Fecha de nacimiento (con año)
         <span id="edad-badge" class="text-muted" style={`font-weight:400;margin-left:8px${edadInicial == null ? ';display:none' : ''}`}>
           {edadInicial != null ? `· ${edadInicial} años` : ''}
         </span>
+        <span id="edad-warning" class="text-muted" style={`font-weight:400;margin-left:8px;color:#e9b949;${edadInicial == null && modelo.cumpleanos ? '' : 'display:none'}`}>
+          ⚠ falta el año
+        </span>
       </label>
-      <input class="input" name="cumpleanos" id="inp-cumpleanos" value={modelo.cumpleanos ?? ''} placeholder="DD/MM/AAAA · ej 19/01/1992" autocomplete="off" />
+      <div style="display:flex;gap:6px">
+        <input class="input" type="date" id="inp-cumpleanos-date" min="1925-01-01" max="2015-12-31" style="max-width:170px" />
+        <input class="input" name="cumpleanos" id="inp-cumpleanos" value={modelo.cumpleanos ?? ''} placeholder="DD/MM/AAAA · ej 19/01/1992" autocomplete="off" />
+      </div>
+      <p class="text-muted" style="font-size:11px;margin-top:4px">
+        Usa el calendario o escribe la fecha. La edad se calcula sola y se actualiza cada cumpleaños.
+      </p>
     </div>
   </div>
 
@@ -194,13 +203,43 @@ const edadInicial = calcularEdad(modelo.cumpleanos);
       return e >= 0 && e < 120 ? e : null;
     }
     const inp = document.getElementById('inp-cumpleanos');
+    const dateInp = document.getElementById('inp-cumpleanos-date');
     const badge = document.getElementById('edad-badge');
-    if (inp && badge) {
-      inp.addEventListener('input', function () {
-        const e = edad(inp.value);
+    const warn = document.getElementById('edad-warning');
+
+    function refresh() {
+      if (!inp) return;
+      const c = parse(inp.value);
+      const e = edad(inp.value);
+      if (badge) {
         if (e == null) { badge.style.display = 'none'; badge.textContent = ''; }
         else { badge.style.display = ''; badge.textContent = '· ' + e + ' años'; }
+      }
+      if (warn) {
+        const hasText = !!(inp.value || '').trim();
+        warn.style.display = (e == null && hasText) ? '' : 'none';
+      }
+      // Sincronizar date picker si la fecha tiene año completo
+      if (dateInp && c && c.anio) {
+        const iso = c.anio + '-' + String(c.mes).padStart(2, '0') + '-' + String(c.dia).padStart(2, '0');
+        if (dateInp.value !== iso) dateInp.value = iso;
+      }
+    }
+
+    if (inp) inp.addEventListener('input', refresh);
+
+    // Cuando se elige fecha del calendario, escribirla como DD/MM/YYYY en el text input
+    if (dateInp && inp) {
+      dateInp.addEventListener('change', function () {
+        const v = dateInp.value; // YYYY-MM-DD
+        if (!v) return;
+        const [y, m, d] = v.split('-');
+        inp.value = `${d}/${m}/${y}`;
+        refresh();
       });
     }
+
+    // Init: si ya hay texto con año, llenar el date picker
+    refresh();
   })();
 </script>

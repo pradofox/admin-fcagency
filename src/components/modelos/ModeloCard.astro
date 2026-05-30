@@ -1,4 +1,6 @@
 ---
+import { calcularEdad } from '../../lib/fechas';
+
 interface Props {
   modelo: {
     id: string;
@@ -6,9 +8,11 @@ interface Props {
     ciudad?: string | null;
     instagram?: string | null;
     estado: string;
+    cumpleanos?: string | null;
   };
 }
 const { modelo } = Astro.props;
+const edad = calcularEdad(modelo.cumpleanos);
 
 const chipClass: Record<string, string> = {
   activo: 'chip-ok',
@@ -20,7 +24,14 @@ const chipClass: Record<string, string> = {
 
 <a href={`/modelos/${modelo.id}`} style="display:block;color:inherit;text-decoration:none">
   <article class="card">
-    <div class="card-title">{modelo.nombre}</div>
+    <div class="card-title">
+      {modelo.nombre}
+      {edad != null && (
+        <span class="text-muted" style="font-weight:400;font-size:.75em;margin-left:8px">
+          {edad}
+        </span>
+      )}
+    </div>
     <div class="card-meta">
       <span class={`chip ${chipClass[modelo.estado] ?? ''}`}>{modelo.estado}</span>
       {modelo.ciudad && <span>{modelo.ciudad}</span>}
