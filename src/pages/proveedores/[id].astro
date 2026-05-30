@@ -32,9 +32,10 @@ if (Astro.request.method === 'POST' && editable) {
       const get = (k: string) => { const v = form.get(k); return v === null || v === '' ? null : String(v).trim(); };
       const horaAdRaw = form.get('precio_hora_adicional');
       const horaAd = horaAdRaw === null || horaAdRaw === '' ? null : Number(horaAdRaw) || 0;
+      const porHora = form.get('por_hora') ? 1 : 0;
       await db
-        .prepare(`UPDATE conceptos_servicio SET nombre=?, rol=?, descripcion=?, precio_mxn=?, precio_hora_adicional=?, notas=?, updated_at=? WHERE id=?`)
-        .bind(nombre, get('rol'), get('descripcion'), precio, horaAd, get('notas'), now(), id)
+        .prepare(`UPDATE conceptos_servicio SET nombre=?, rol=?, descripcion=?, precio_mxn=?, precio_hora_adicional=?, por_hora=?, notas=?, updated_at=? WHERE id=?`)
+        .bind(nombre, get('rol'), get('descripcion'), precio, horaAd, porHora, get('notas'), now(), id)
         .run();
       msgOk = 'Concepto actualizado.';
     }
@@ -327,6 +328,14 @@ const editRepartoId = Astro.url.searchParams.get('editar');
           <div class="col">
             <label class="label" id="lbl_precio_edit">Cobro al cliente MXN</label>
             <input class="input" type="number" name="precio_mxn" value={concepto.precio_mxn} min="0" step="1" />
+          </div>
+        </div>
+        <div class="row">
+          <div class="col" style="display:flex;align-items:center;padding:6px 0 14px">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+              <input type="checkbox" name="por_hora" value="1" checked={!!concepto.por_hora} />
+              Se cobra por hora (el campo Horas del cotizador multiplica el subtotal solo en estos conceptos)
+            </label>
           </div>
         </div>
         <div id="row_hora_ad_edit" style="display:none;background:var(--bg-3,#1a1a1a);border:1px solid var(--border);padding:12px;border-radius:4px;margin-bottom:6px">
