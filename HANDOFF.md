@@ -24,6 +24,20 @@ Datos en producción al 2026-05-28:
 
 ---
 
+## 1.5 — Estado actual (2026-05-29)
+
+**main:** estable en commit `0fb12e1` — "Cotizador estilo hoja MATRIZ: catálogo con backup de precios FC". Catálogo de conceptos completo con backup de precios.
+
+**Branch activa pendiente:** `wip/horas-por-servicio`
+- Trabajo a medias: agregar flag `por_hora` a `conceptos_servicio` para que el campo "Horas" del cotizador solo aplique a conceptos cobrados por hora (hora de estudio, modelo editorial, hora extra de maquillaje, etc.) y no a paquetes/membresías.
+- Incluye: `migrations/0041_concepto_por_hora.sql` + cambios parciales en `src/pages/cotizaciones/[id].astro` y `src/pages/proveedores/index.astro`.
+- Estado: NO mergear a main hasta revisar y completar la lógica UI. La migración SQL ya marca los conceptos por hora correctos de la matriz (mtz-02, 03, 05, 06, 08, 09, 11, 12, 16, 17).
+- Para retomar: `git fetch && git checkout wip/horas-por-servicio` y completar la lógica de mostrar/aplicar Horas solo cuando `por_hora = 1`.
+
+**Quién está editando ahorita:** Lili (en su Mac, `~/Code/admin-fcagency`). Cuando ella termine, cualquier otra sesión puede continuar desde la branch WIP.
+
+---
+
 ## 2 — Quién usa qué
 
 | Persona | Rol | Plataforma vieja que operaba |
