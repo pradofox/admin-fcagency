@@ -137,6 +137,36 @@ const { results: proximas } = await db
   .bind(id)
   .all<any>();
 
+// ── Stats del perfil ──────────────────────────────────────────────────────
+// % de perfil completado: cuenta campos opcionales rellenos / total.
+// Campos clave del perfil de una modelo (excluye nombre que es obligatorio
+// y notas internas que no aporta al "perfil" para clientes).
+const camposTexto = [
+  modelo.email, modelo.whatsapp, modelo.instagram, modelo.cumpleanos, modelo.genero, modelo.ciudad,
+  modelo.cabello, modelo.ojos, modelo.talentos, modelo.drive_folder,
+] as (string | null | undefined)[];
+const camposNum = [
+  modelo.estatura_cm, modelo.busto_cm, modelo.cintura_cm, modelo.cadera_cm, modelo.calzado_mx,
+] as (number | null | undefined)[];
+const camposCheck = [modelo.polas, modelo.book, modelo.videocasting] as (number | null | undefined)[];
+const completos =
+  camposTexto.filter((v) => v !== null && v !== undefined && String(v).trim() !== '').length +
+  camposNum.filter((v) => v !== null && v !== undefined).length +
+  camposCheck.filter((v) => v === 1).length;
+const totalCampos = camposTexto.length + camposNum.length + camposCheck.length;
+const pctCompleto = totalCampos > 0 ? Math.round((completos / totalCampos) * 100) : 0;
+const colorPct =
+  pctCompleto >= 80 ? 'var(--text-ok,#4ade80)' :
+  pctCompleto >= 50 ? '#e9b949' : 'var(--danger,#e25555)';
+
+// Total de trabajos: trabajos_modelo (registro oficial) + lineas_produccion
+// historicas (apariciones en producciones del repo nuevo).
+const totalTrabajos = (trabajos?.length ?? 0) + (lineasPorNombre?.length ?? 0);
+
+// Ultima edicion del registro: timestamp ms del UPDATE mas reciente.
+const updTs = modelo.updated_at ? Number(modelo.updated_at) : null;
+const ultimaEdicion = updTs ? new Date(updTs).toISOString().slice(0, 10) : null;
+
 // Token para el feed .ics suscribible (Google/Apple Calendar). Se genera si falta.
 let icsToken = (modelo as any).ics_token as string | null;
 if (!icsToken) {
@@ -182,6 +212,29 @@ const colorEstado: Record<string, string> = {
 
   {saved && <p class="text-ok" style="margin-bottom:20px">Guardado.</p>}
   {error && <p class="text-danger" style="margin-bottom:20px">{error}</p>}
+
+  {/* ── Stats del perfil ── */}
+  <div class="row" style="margin-bottom:24px">
+    <div class="col card" style={`border-left:3px solid ${colorPct}`}>
+      <div class="card-meta">Perfil completo</div>
+      <div class="card-title mono" style={`color:${colorPct}`}>{pctCompleto}%</div>
+      <div class="text-muted" style="font-size:11px;margin-top:2px">{completos}/{totalCampos} campos</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Trabajos</div>
+      <div class="card-title mono">{totalTrabajos}</div>
+      <div class="text-muted" style="font-size:11px;margin-top:2px">
+        {trabajos?.length ?? 0} historicos · {lineasPorNombre?.length ?? 0} en producciones
+      </div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Ultima actualizacion</div>
+      <div class="card-title mono" style="font-size:15px">{ultimaEdicion ?? '—'}</div>
+      <div class="text-muted" style="font-size:11px;margin-top:2px">
+        {modelo.material_actualizado_en ? `Material subido: ${modelo.material_actualizado_en}` : 'Sin material subido aun'}
+      </div>
+    </div>
+  </div>
 
   {/* ── Agenda / próximas producciones ── */}
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
