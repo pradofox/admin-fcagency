@@ -53,11 +53,13 @@ if (Astro.request.method === 'POST' && editable) {
       const precioBase = concepto.precio_mxn ?? 0;
       const horaAd = concepto.precio_hora_adicional ?? null;
       const porHora = horaAd != null && horaAd > 0;
+      // Las horas solo cuentan si el concepto se cobra por hora.
+      const esPorHora = !!concepto.por_hora || porHora;
 
       const cantRaw  = form.get('cantidad');
       const cantidad = cantRaw === null || cantRaw === '' ? 1 : Math.max(1, Number(cantRaw) || 1);
       const horasRaw = form.get('horas');
-      const horas    = horasRaw === null || horasRaw === '' ? 1 : Math.max(1, Number(horasRaw) || 1);
+      const horas    = !esPorHora ? 1 : (horasRaw === null || horasRaw === '' ? 1 : Math.max(1, Number(horasRaw) || 1));
 
       // Subtotal de la línea (lo que ve el cliente).
       // Tiered (modelo con hora adicional): (1ª hora + extras) × cantidad.
@@ -257,7 +259,7 @@ const { results: clientes } = await db.prepare('SELECT id, nombre FROM clientes 
 // Catálogo de conceptos con su reparto (para agregar al catálogo)
 const { results: conceptosCat } = await db
   .prepare(
-    `SELECT cs.id, cs.nombre, cs.rol, cs.precio_mxn, cs.precio_hora_adicional,
+    `SELECT cs.id, cs.nombre, cs.rol, cs.precio_mxn, cs.precio_hora_adicional, cs.por_hora,
             json_group_array(json_object(
               'proveedor_nombre', r.proveedor_nombre,
               'rol', r.rol,
@@ -533,7 +535,7 @@ const ESTADOS_FLUJO = [
             <label class="label">Cantidad</label>
             <input class="input" type="number" name="cantidad" id="inp_cantidad_cat" min="1" step="1" value="1" onchange="onProvChange()" oninput="onProvChange()" style="width:90px" />
           </div>
-          <div style="min-width:90px">
+          <div style="min-width:90px;display:none" id="col_horas_cat">
             <label class="label">Horas</label>
             <input class="input" type="number" name="horas" id="inp_horas_cat" min="1" step="0.5" value="1" onchange="onProvChange()" oninput="onProvChange()" style="width:90px" />
           </div>
@@ -666,14 +668,19 @@ function onProvChange() {
     return;
   }
 
-  let cantidad = parseFloat(document.getElementById('inp_cantidad_cat')?.value || '1') || 1;
-  if (cantidad < 1) cantidad = 1;
-  let horas = parseFloat(document.getElementById('inp_horas_cat')?.value || '1') || 1;
-  if (horas < 1) horas = 1;
-
   const precioBase = concepto.precio_mxn || 0;
   const horaAd = concepto.precio_hora_adicional;
   const porHora = horaAd != null && horaAd > 0;
+  const esPorHora = !!concepto.por_hora || porHora;
+
+  // Mostrar el campo Horas solo si el concepto se cobra por hora.
+  const colHoras = document.getElementById('col_horas_cat');
+  if (colHoras) colHoras.style.display = esPorHora ? 'block' : 'none';
+
+  let cantidad = parseFloat(document.getElementById('inp_cantidad_cat')?.value || '1') || 1;
+  if (cantidad < 1) cantidad = 1;
+  let horas = esPorHora ? (parseFloat(document.getElementById('inp_horas_cat')?.value || '1') || 1) : 1;
+  if (horas < 1) horas = 1;
 
   // Subtotal: tiered (1ª hora + extras) × cantidad, o precio × cantidad × horas.
   const subtotal = porHora

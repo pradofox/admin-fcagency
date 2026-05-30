@@ -31,12 +31,13 @@ if (Astro.request.method === 'POST' && editable) {
     const horaAd = horaAdRaw === null || horaAdRaw === '' ? null : Number(horaAdRaw) || 0;
     const maxDescRaw = form.get('max_descuento');
     const maxDesc = maxDescRaw === null || maxDescRaw === '' ? null : Number(maxDescRaw) || 0;
+    const porHora = form.get('por_hora') ? 1 : 0;
     const ts = now();
     const id = newId();
     await db
-      .prepare(`INSERT INTO conceptos_servicio (id, nombre, rol, categoria, descripcion, precio_mxn, precio_hora_adicional, max_descuento, notas, activo, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
-      .bind(id, nombre, get('rol'), get('categoria'), get('descripcion'), precio, horaAd, maxDesc, get('notas'), ts, ts)
+      .prepare(`INSERT INTO conceptos_servicio (id, nombre, rol, categoria, descripcion, precio_mxn, precio_hora_adicional, max_descuento, por_hora, notas, activo, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`)
+      .bind(id, nombre, get('rol'), get('categoria'), get('descripcion'), precio, horaAd, maxDesc, porHora, get('notas'), ts, ts)
       .run();
     return Astro.redirect(`/proveedores/${id}`);
   }
@@ -129,7 +130,12 @@ const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
             <label class="label">Tope de descuento %</label>
             <input class="input" type="number" name="max_descuento" min="0" max="100" step="1" placeholder="Ej. 15" />
           </div>
-          <div class="col"></div>
+          <div class="col" style="display:flex;align-items:flex-end;padding-bottom:10px">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+              <input type="checkbox" name="por_hora" value="1" />
+              Se cobra por hora
+            </label>
+          </div>
         </div>
         {/* Hora adicional — solo aplica a roles por hora (Modelo) */}
         <div id="row_hora_ad" style="display:none;background:var(--bg-3,#1a1a1a);border:1px solid var(--border);padding:12px;border-radius:4px;margin-bottom:6px">
