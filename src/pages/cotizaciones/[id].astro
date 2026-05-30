@@ -164,11 +164,37 @@ if (Astro.request.method === 'POST' && editable) {
     else {
       const get = (k: string) => { const v = form.get(k); return v === null || v === '' ? null : String(v).trim(); };
       await db
-        .prepare('UPDATE cotizaciones SET titulo = ?, cliente_id = ?, cliente_libre = ?, fecha_vencimiento = ?, notas = ?, notas_internas = ?, updated_at = ? WHERE id = ?')
-        .bind(titulo, get('cliente_id'), get('cliente_libre'), get('fecha_vencimiento'), get('notas'), get('notas_internas'), now(), id)
+        .prepare('UPDATE cotizaciones SET titulo = ?, cliente_id = ?, cliente_libre = ?, fecha_vencimiento = ?, tipo = ?, fecha_evento = ?, hora_evento = ?, ubicacion = ?, notas = ?, notas_internas = ?, updated_at = ? WHERE id = ?')
+        .bind(titulo, get('cliente_id'), get('cliente_libre'), get('fecha_vencimiento'), get('tipo'), get('fecha_evento'), get('hora_evento'), get('ubicacion'), get('notas'), get('notas_internas'), now(), id)
         .run();
       msgOk = 'Guardado.';
     }
+  }
+
+  // ── Agregar modelo propuesto a la cotizacion ───────────────────────────────
+  if (action === 'add_modelo_cot') {
+    const modeloId = form.get('modelo_id') as string;
+    const rol      = (form.get('rol') as string)?.trim() || null;
+    if (modeloId) {
+      try {
+        await db
+          .prepare('INSERT INTO cotizacion_modelos (id, cotizacion_id, modelo_id, rol, created_at) VALUES (?, ?, ?, ?, ?)')
+          .bind(newId(), id, modeloId, rol, now())
+          .run();
+      } catch { /* UNIQUE violation: ya estaba propuesto */ }
+      await db.prepare('UPDATE cotizaciones SET updated_at = ? WHERE id = ?').bind(now(), id).run();
+    }
+    return Astro.redirect(`/cotizaciones/${id}#modelos`);
+  }
+
+  // ── Quitar modelo propuesto ────────────────────────────────────────────────
+  if (action === 'remove_modelo_cot') {
+    const cmId = form.get('cm_id') as string;
+    if (cmId) {
+      await db.prepare('DELETE FROM cotizacion_modelos WHERE id = ? AND cotizacion_id = ?').bind(cmId, id).run();
+      await db.prepare('UPDATE cotizaciones SET updated_at = ? WHERE id = ?').bind(now(), id).run();
+    }
+    return Astro.redirect(`/cotizaciones/${id}#modelos`);
   }
 
   // ── Convertir a proyecto ───────────────────────────────────────────────────
@@ -177,6 +203,25 @@ if (Astro.request.method === 'POST' && editable) {
     if (!cot || cot.estado !== 'autorizada') {
       error = 'Solo se puede convertir una cotización autorizada.';
     } else {
+      // Fecha y ubicacion del form modal (o las de la cotizacion si ya las tiene)
+      const fechaInicio = (form.get('fecha_inicio') as string) || cot.fecha_evento || null;
+      const fechaFin    = (form.get('fecha_fin') as string) || null;
+      const ubicacion   = (form.get('ubicacion') as string) || cot.ubicacion || null;
+      const tipoProd    = cot.tipo || null;
+
+      // Para editorial/pasarela la fecha es obligatoria.
+      const requiereFecha = tipoProd === 'editorial' || tipoProd === 'pasarela';
+      if (requiereFecha && !fechaInicio) {
+        error = 'Para producciones editoriales o pasarelas la fecha es obligatoria.';
+        // Caemos al render normal mostrando el error.
+      } else {
+
+      // Guardar los datos en la cotizacion para historico
+      if (fechaInicio || ubicacion) {
+        await db.prepare('UPDATE cotizaciones SET fecha_evento = COALESCE(?, fecha_evento), ubicacion = COALESCE(?, ubicacion), updated_at = ? WHERE id = ?')
+          .bind(fechaInicio, ubicacion, now(), id).run();
+      }
+
       const { results: lineas } = await db
         .prepare('SELECT * FROM lineas_cotizacion WHERE cotizacion_id = ? ORDER BY orden')
         .bind(id).all<any>();
@@ -186,10 +231,22 @@ if (Astro.request.method === 'POST' && editable) {
       const totalCobro = (lineas ?? []).reduce((s: number, l: any) => s + (l.precio_unitario ?? 0), 0);
 
       await db
-        .prepare(`INSERT INTO producciones (id, titulo, cliente_id, fecha_inicio, estado, presupuesto, notas, created_at, updated_at)
-                  VALUES (?, ?, ?, date('now'), 'planeacion', ?, ?, ?, ?)`)
-        .bind(prodId, cot.titulo, cot.cliente_id, totalCobro, cot.notas, ts, ts)
+        .prepare(`INSERT INTO producciones (id, titulo, cliente_id, fecha_inicio, fecha_fin, ubicacion, estado, presupuesto, notas, created_at, updated_at)
+                  VALUES (?, ?, ?, ?, ?, ?, 'planeacion', ?, ?, ?, ?)`)
+        .bind(prodId, cot.titulo, cot.cliente_id, fechaInicio ?? new Date().toISOString().slice(0,10), fechaFin, ubicacion, totalCobro, cot.notas, ts, ts)
         .run();
+
+      // Bookings tentativos desde modelos propuestos en la cotizacion
+      const { results: modelosProp } = await db
+        .prepare('SELECT modelo_id, rol, notas FROM cotizacion_modelos WHERE cotizacion_id = ?')
+        .bind(id).all<{ modelo_id: string; rol: string | null; notas: string | null }>();
+      for (const m of (modelosProp ?? [])) {
+        await db
+          .prepare(`INSERT INTO bookings (id, produccion_id, modelo_id, rol, estado, notas, created_at)
+                    VALUES (?, ?, ?, ?, 'tentativo', ?, ?)`)
+          .bind(newId(), prodId, m.modelo_id, m.rol, m.notas, ts)
+          .run();
+      }
 
       for (const l of (lineas ?? [])) {
         const cobroLinea = l.precio_unitario ?? 0;
@@ -227,8 +284,9 @@ if (Astro.request.method === 'POST' && editable) {
         .prepare("UPDATE cotizaciones SET estado = 'convertida', produccion_id = ?, updated_at = ? WHERE id = ?")
         .bind(prodId, ts, id).run();
 
-      await logAudit(db, { user, accion: 'convertir', entidad: 'cotizacion', entidad_id: id, entidad_label: null, payload: { produccion_id: prodId } });
+      await logAudit(db, { user, accion: 'convertir', entidad: 'cotizacion', entidad_id: id, entidad_label: null, payload: { produccion_id: prodId, tipo: tipoProd, fecha: fechaInicio, modelos: modelosProp?.length ?? 0 } });
       return Astro.redirect(`/producciones/${prodId}`);
+      } // cierra el else de requiereFecha
     }
   }
 }
@@ -260,6 +318,21 @@ const lineas = (lineasRaw ?? []).map((l: any) => {
 });
 
 const { results: clientes } = await db.prepare('SELECT id, nombre FROM clientes ORDER BY nombre').all<any>();
+
+// Modelos propuestos para la cotizacion
+const { results: modelosPropuestos } = await db
+  .prepare(`SELECT cm.id, cm.modelo_id, cm.rol, cm.notas, m.nombre, m.instagram, m.ciudad
+            FROM cotizacion_modelos cm
+            JOIN modelos m ON m.id = cm.modelo_id
+            WHERE cm.cotizacion_id = ?
+            ORDER BY m.nombre`)
+  .bind(id).all<any>();
+
+// Catalogo de modelos activos (para el selector)
+const { results: modelosCat } = await db
+  .prepare("SELECT id, nombre, instagram, ciudad FROM modelos WHERE estado = 'activo' ORDER BY nombre")
+  .all<{ id: string; nombre: string; instagram: string | null; ciudad: string | null }>();
+const propIds = new Set((modelosPropuestos ?? []).map((m: any) => m.modelo_id));
 
 // Catálogo de conceptos con su reparto (para agregar al catálogo)
 const { results: conceptosCat } = await db
@@ -383,13 +456,28 @@ const ESTADOS_FLUJO = [
         </form>
       ))}
       {cot.estado === 'autorizada' && (
-        <form method="POST" action={`/cotizaciones/${id}`} style="display:inline"
-              onsubmit="return confirm('¿Convertir en proyecto? Se creará una producción con todas las líneas y sus proveedores.')">
-          <input type="hidden" name="_action" value="convertir" />
-          <button type="submit" class="btn btn-primary" style="background:var(--gold);color:#000;font-weight:700">
+        <details style="display:inline-block;position:relative">
+          <summary class="btn btn-primary" style="background:var(--gold);color:#000;font-weight:700;list-style:none;cursor:pointer">
             ✓ Convertir en proyecto
-          </button>
-        </form>
+          </summary>
+          <form method="POST" action={`/cotizaciones/${id}`}
+                style="position:absolute;top:100%;left:0;margin-top:6px;background:var(--bg-2);border:1px solid var(--border);padding:16px;border-radius:4px;min-width:340px;z-index:10;box-shadow:0 4px 16px rgba(0,0,0,.4)">
+            <input type="hidden" name="_action" value="convertir" />
+            <p class="text-muted" style="font-size:12px;margin:0 0 12px">
+              Se creará una producción con todas las líneas, proveedores y modelos propuestos.
+              {(cot.tipo === 'editorial' || cot.tipo === 'pasarela') && <strong style="color:#e9b949"> Fecha obligatoria para {cot.tipo}.</strong>}
+            </p>
+            <label class="label">Fecha del evento {(cot.tipo === 'editorial' || cot.tipo === 'pasarela') ? '*' : ''}</label>
+            <input class="input" type="date" name="fecha_inicio" value={cot.fecha_evento ?? ''} required={cot.tipo === 'editorial' || cot.tipo === 'pasarela'} />
+            <label class="label" style="margin-top:8px">Fecha fin (opcional)</label>
+            <input class="input" type="date" name="fecha_fin" />
+            <label class="label" style="margin-top:8px">Ubicación</label>
+            <input class="input" name="ubicacion" value={cot.ubicacion ?? ''} placeholder="Ej. District Studio" />
+            <button type="submit" class="btn btn-primary" style="background:var(--gold);color:#000;font-weight:700;margin-top:12px;width:100%">
+              ✓ Convertir
+            </button>
+          </form>
+        </details>
       )}
     </div>
   )}
@@ -622,6 +710,61 @@ const ESTADOS_FLUJO = [
     )}
   </div>
 
+  {/* ── Modelos propuestos ── */}
+  <div id="modelos" style="margin-bottom:32px">
+    <h2 style="margin-bottom:12px">
+      Modelos propuestos
+      <small class="text-muted" style="font-size:12px;letter-spacing:0;font-family:var(--font-body);text-transform:none">
+        {modelosPropuestos?.length ?? 0}
+      </small>
+    </h2>
+    {modelosPropuestos && modelosPropuestos.length > 0 ? (
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+        {(modelosPropuestos as any[]).map((m) => (
+          <div style="display:flex;align-items:center;gap:6px;background:var(--bg-2);border:1px solid var(--border);padding:6px 10px;border-radius:20px;font-size:12px">
+            <a href={`/modelos/${m.modelo_id}`} style="color:inherit;font-weight:600">{m.nombre}</a>
+            {m.rol && <span class="text-muted">· {m.rol}</span>}
+            {m.instagram && <span class="text-muted" style="font-size:11px">@{m.instagram.replace(/^@/, '')}</span>}
+            {editable && cot.estado !== 'convertida' && (
+              <form method="POST" action={`/cotizaciones/${id}`} style="display:inline;margin-left:4px">
+                <input type="hidden" name="_action" value="remove_modelo_cot" />
+                <input type="hidden" name="cm_id" value={m.id} />
+                <button type="submit" class="btn btn-sm btn-danger" title="Quitar de la cotización"
+                        style="padding:1px 6px;font-size:11px;line-height:1;border-radius:50%">×</button>
+              </form>
+            )}
+          </div>
+        ))}
+      </div>
+    ) : (
+      <p class="text-muted" style="font-size:12px;margin-bottom:12px">Sin modelos propuestos aún. Agrega del roster abajo.</p>
+    )}
+
+    {editable && cot.estado !== 'convertida' && (modelosCat?.length ?? 0) > 0 && (
+      <form method="POST" action={`/cotizaciones/${id}`}
+            style="display:flex;gap:6px;align-items:flex-end;background:var(--bg-2);border:1px solid var(--border);padding:12px;border-radius:4px">
+        <input type="hidden" name="_action" value="add_modelo_cot" />
+        <div style="flex:2">
+          <label class="label">Agregar modelo del roster</label>
+          <select class="select" name="modelo_id" required>
+            <option value="">— elegir modelo —</option>
+            {(modelosCat as any[]).filter((m) => !propIds.has(m.id)).map((m) => (
+              <option value={m.id}>{m.nombre}{m.ciudad ? ` · ${m.ciudad}` : ''}</option>
+            ))}
+          </select>
+        </div>
+        <div style="flex:1">
+          <label class="label">Rol (opcional)</label>
+          <input class="input" name="rol" placeholder="Ej. Imagen principal" />
+        </div>
+        <button type="submit" class="btn btn-primary">+ Agregar</button>
+      </form>
+    )}
+    {(modelosCat?.length ?? 0) === 0 && (
+      <p class="text-muted" style="font-size:11px">No hay modelos activos en el roster.</p>
+    )}
+  </div>
+
   {/* ── Editar cabecera ── */}
   {editable && cot.estado !== 'convertida' && (
     <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:32px">
@@ -645,6 +788,29 @@ const ESTADOS_FLUJO = [
           <div class="col">
             <label class="label">Fecha vencimiento</label>
             <input class="input" type="date" name="fecha_vencimiento" value={cot.fecha_vencimiento ?? ''} />
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <label class="label">Tipo de producción</label>
+            <select class="select" name="tipo">
+              <option value="">— sin definir —</option>
+              {['editorial','pasarela','campaña','social media','plan district studio','otro'].map((t) => (
+                <option value={t} selected={cot.tipo === t}>{t}</option>
+              ))}
+            </select>
+          </div>
+          <div class="col">
+            <label class="label">Fecha del evento</label>
+            <input class="input" type="date" name="fecha_evento" value={cot.fecha_evento ?? ''} />
+          </div>
+          <div class="col">
+            <label class="label">Hora</label>
+            <input class="input" type="time" name="hora_evento" value={cot.hora_evento ?? ''} />
+          </div>
+          <div class="col">
+            <label class="label">Ubicación</label>
+            <input class="input" name="ubicacion" value={cot.ubicacion ?? ''} placeholder="Ej. District Studio" />
           </div>
         </div>
         <label class="label">Notas para el cliente</label>

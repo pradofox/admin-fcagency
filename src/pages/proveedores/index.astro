@@ -22,6 +22,23 @@ let error: string | null = null;
 
 if (Astro.request.method === 'POST' && editable) {
   const form   = await Astro.request.formData();
+  const action = form.get('_action') as string | null;
+
+  // ── Borrar concepto desde la lista ─────────────────────────────────────
+  // Mismo comportamiento que /proveedores/[id] delete_concepto: cascadea
+  // repartos, suelta lineas_cotizacion, borra el concepto y deja audit.
+  if (action === 'delete_concepto') {
+    const delId = form.get('concepto_id') as string;
+    if (delId) {
+      const prev = await db.prepare('SELECT nombre FROM conceptos_servicio WHERE id=?').bind(delId).first<{ nombre: string }>();
+      await db.prepare('DELETE FROM repartos_concepto WHERE concepto_id=?').bind(delId).run();
+      await db.prepare('UPDATE lineas_cotizacion SET concepto_id=NULL WHERE concepto_id=?').bind(delId).run();
+      await db.prepare('DELETE FROM conceptos_servicio WHERE id=?').bind(delId).run();
+      await logAudit(db, { user, accion: 'delete', entidad: 'concepto', entidad_id: delId, entidad_label: prev?.nombre ?? null });
+    }
+    return Astro.redirect('/proveedores');
+  }
+
   const nombre = (form.get('nombre') as string)?.trim();
   const precio = Number(form.get('precio_mxn') ?? 0) || 0;
 
@@ -195,33 +212,46 @@ const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
                 const pctMar   = c.precio_mxn > 0 ? Math.round(margen / c.precio_mxn * 100) : 0;
                 const sinReparto = (c.num_proveedores ?? 0) === 0;
                 return (
-                  <a href={`/proveedores/${c.id}`} class="card"
-                     style="display:block;color:inherit;text-decoration:none">
-                    <div style="font-weight:600;margin-bottom:2px">{c.nombre}</div>
-                    {c.descripcion && <div class="text-muted" style="font-size:11px;margin-bottom:6px">{c.descripcion}</div>}
-                    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
-                      <span class="mono" style="color:var(--gold);font-size:15px">{fmt(c.precio_mxn)}</span>
-                      {c.num_proveedores > 0 && (
-                        <span class="text-muted" style="font-size:11px">{c.num_proveedores} proveedor{c.num_proveedores !== 1 ? 'es' : ''}</span>
-                      )}
-                    </div>
-                    {/* Margen / % ganancia — solo admin */}
-                    {verMargen && c.precio_mxn > 0 && (
-                      <div style="margin-top:6px">
-                        <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden">
-                          <div style={`height:100%;width:${100-pctMar}%;background:var(--danger,#e25555)`}></div>
-                        </div>
-                        <div style="display:flex;justify-content:space-between;font-size:10px;margin-top:3px">
-                          <span class="text-muted">
-                            {sinReparto ? 'sin reparto definido' : `proveedores ${fmt(c.total_repartido)}`}
-                          </span>
-                          <span style={`color:${pctMar >= 15 ? 'var(--text-ok,#4ade80)' : 'var(--danger)'}`}>
-                            ganancia {pctMar}%
-                          </span>
-                        </div>
-                      </div>
+                  <div class="card" style="position:relative;padding:0">
+                    {/* Boton borrar - solo editores+ y como overlay fuera del link */}
+                    {editable && (
+                      <form method="POST" action="/proveedores"
+                            onsubmit={`return confirm('¿Borrar el concepto "${c.nombre.replace(/"/g, '\\"')}"? Esta acción no se puede deshacer.')`}
+                            style="position:absolute;top:6px;right:6px;z-index:2;margin:0">
+                        <input type="hidden" name="_action" value="delete_concepto" />
+                        <input type="hidden" name="concepto_id" value={c.id} />
+                        <button type="submit" class="btn btn-sm btn-danger" title="Borrar concepto"
+                                style="padding:2px 7px;font-size:11px;line-height:1;opacity:.7" onclick="event.stopPropagation()">×</button>
+                      </form>
                     )}
-                  </a>
+                    <a href={`/proveedores/${c.id}`}
+                       style="display:block;color:inherit;text-decoration:none;padding:12px 14px">
+                      <div style="font-weight:600;margin-bottom:2px;padding-right:22px">{c.nombre}</div>
+                      {c.descripcion && <div class="text-muted" style="font-size:11px;margin-bottom:6px">{c.descripcion}</div>}
+                      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+                        <span class="mono" style="color:var(--gold);font-size:15px">{fmt(c.precio_mxn)}</span>
+                        {c.num_proveedores > 0 && (
+                          <span class="text-muted" style="font-size:11px">{c.num_proveedores} proveedor{c.num_proveedores !== 1 ? 'es' : ''}</span>
+                        )}
+                      </div>
+                      {/* Ganancia - solo admin */}
+                      {verMargen && c.precio_mxn > 0 && (
+                        <div style="margin-top:6px">
+                          <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden">
+                            <div style={`height:100%;width:${100-pctMar}%;background:var(--danger,#e25555)`}></div>
+                          </div>
+                          <div style="display:flex;justify-content:space-between;font-size:10px;margin-top:3px">
+                            <span class="text-muted">
+                              {sinReparto ? 'sin reparto definido' : `proveedores ${fmt(c.total_repartido)}`}
+                            </span>
+                            <span style={`color:${pctMar >= 15 ? 'var(--text-ok,#4ade80)' : 'var(--danger)'}`}>
+                              ganancia {pctMar}%
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </a>
+                  </div>
                 );
               })}
             </div>
