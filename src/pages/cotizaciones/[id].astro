@@ -681,47 +681,84 @@ const ESTADOS_FLUJO = [
 
     {!lineas.length && <p class="text-muted">Sin líneas aún. Agrega conceptos del catálogo abajo.</p>}
 
-    {/* ── Agregar desde el catálogo ── */}
-    {editable && cot.estado !== 'convertida' && proveedoresData.length > 0 && (
-      <details style="background:var(--bg-2);border:1px solid var(--border);padding:16px;margin-bottom:12px" open id="details_add_cat">
-        <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Agregar del catálogo de servicios</summary>
-        <p class="text-muted" style="font-size:11px;margin:8px 0 12px">
-          El concepto trae su precio y el reparto a proveedores ya definido. La utilidad de FC se calcula sola.
-        </p>
-        <form method="POST" action={`/cotizaciones/${id}`} style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
-          <input type="hidden" name="_action" value="add_concepto" />
-          <div style="flex:1;min-width:280px">
-            <label class="label">Concepto</label>
-            <select class="select" name="concepto_id" id="sel_prov_cat" onchange="onProvChange()" required>
-              <option value="">— elegir concepto —</option>
-              {proveedoresData.map((c: any) => (
-                <option value={c.id}>
-                  {c.rol ? `[${c.rol}] ` : ''}{c.nombre} — ${Math.round(c.precio_mxn).toLocaleString('es-MX')}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div style="min-width:90px">
-            <label class="label" id="lbl_cantidad_cat">Cantidad</label>
-            <input class="input" type="number" name="cantidad" id="inp_cantidad_cat" min="1" step="1" value="1" onchange="onProvChange()" oninput="onProvChange()" style="width:120px" />
-          </div>
-          <div style="min-width:90px;display:none" id="col_horas_cat">
-            <label class="label" id="lbl_horas_cat">Horas</label>
-            <input class="input" type="number" name="horas" id="inp_horas_cat" min="1" step="0.5" value="1" onchange="onProvChange()" oninput="onProvChange()" style="width:120px" />
-          </div>
-          <button type="submit" class="btn btn-primary">Agregar a la cotización</button>
-        </form>
+    {/* ── Agregar desde el catálogo: dos forms separados (modelos y servicios) ── */}
+    {editable && cot.estado !== 'convertida' && proveedoresData.length > 0 && (() => {
+      const esModelo = (c: any) => /modelo/i.test(String(c.rol || '')) || /modelo/i.test(String(c.nombre || ''));
+      const conceptosModelo  = proveedoresData.filter(esModelo);
+      const conceptosServicio = proveedoresData.filter((c: any) => !esModelo(c));
+      return (
+        <div style="margin-bottom:12px">
+          {/* ── FORM 1: AGREGAR MODELOS (con campo Horas) ── */}
+          {conceptosModelo.length > 0 && (
+            <details style="background:var(--bg-2);border:1px solid var(--border);padding:16px;margin-bottom:10px" open>
+              <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Agregar modelos a la cotización</summary>
+              <p class="text-muted" style="font-size:11px;margin:8px 0 12px">
+                1ª hora por modelo = $1,000 · cada hora extra por modelo = $800. Captura cuántos modelos y cuántas horas.
+              </p>
+              <form method="POST" action={`/cotizaciones/${id}`} style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+                <input type="hidden" name="_action" value="add_concepto" />
+                <div style="flex:1;min-width:240px">
+                  <label class="label">Concepto de modelo</label>
+                  <select class="select" name="concepto_id" required>
+                    <option value="">— elegir —</option>
+                    {conceptosModelo.map((c: any) => (
+                      <option value={c.id}>
+                        {c.rol ? `[${c.rol}] ` : ''}{c.nombre}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div style="min-width:120px">
+                  <label class="label">Cantidad de modelos</label>
+                  <input class="input" type="number" name="cantidad" min="1" step="1" value="1" required style="width:130px" />
+                </div>
+                <div style="min-width:120px">
+                  <label class="label">Horas de modelo</label>
+                  <input class="input" type="number" name="horas" min="1" step="0.5" value="1" required style="width:130px" />
+                </div>
+                <button type="submit" class="btn btn-primary">Agregar a la cotización</button>
+              </form>
+            </details>
+          )}
 
-        {/* Preview del subtotal y reparto del concepto seleccionado */}
-        <div id="preview_concepto" style="display:none;margin-top:12px;padding:10px;background:var(--bg-3,#1a1a1a);border:1px solid var(--border);border-radius:4px">
-          <div class="card-meta" style="margin-bottom:6px">Desglose del concepto</div>
-          <div id="preview_repartos" style="font-size:12px"></div>
+          {/* ── FORM 2: AGREGAR OTROS SERVICIOS (sin campo Horas) ── */}
+          {conceptosServicio.length > 0 && (
+            <details style="background:var(--bg-2);border:1px solid var(--border);padding:16px" open>
+              <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Agregar servicio del catálogo</summary>
+              <p class="text-muted" style="font-size:11px;margin:8px 0 12px">
+                Paquetes, estudio, maquillaje, catering, etc. El concepto trae su precio y reparto a proveedores ya definido.
+              </p>
+              <form method="POST" action={`/cotizaciones/${id}`} style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+                <input type="hidden" name="_action" value="add_concepto" />
+                <div style="flex:1;min-width:280px">
+                  <label class="label">Concepto</label>
+                  <select class="select" name="concepto_id" required>
+                    <option value="">— elegir concepto —</option>
+                    {conceptosServicio.map((c: any) => (
+                      <option value={c.id}>
+                        {c.rol ? `[${c.rol}] ` : ''}{c.nombre} — ${Math.round(c.precio_mxn).toLocaleString('es-MX')}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div style="min-width:120px">
+                  <label class="label">Cantidad</label>
+                  <input class="input" type="number" name="cantidad" min="1" step="1" value="1" required style="width:130px" />
+                </div>
+                <button type="submit" class="btn btn-primary">Agregar a la cotización</button>
+              </form>
+            </details>
+          )}
         </div>
+      );
+    })()}
 
-        <p style="font-size:11px;margin-top:14px">
+    {editable && cot.estado !== 'convertida' && proveedoresData.length > 0 && (
+      <div style="margin-bottom:12px">
+        <p style="font-size:11px;margin:0">
           <a href="/proveedores" style="color:var(--gold)">¿Falta un concepto? Crea o edita en el catálogo de servicios →</a>
         </p>
-      </details>
+      </div>
     )}
 
     {/* ── Agregar servicio manual (fuera del catálogo) ── */}
