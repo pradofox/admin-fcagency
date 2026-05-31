@@ -46,17 +46,18 @@ if (Astro.request.method === 'POST' && editable) {
     error = 'El nombre es obligatorio.';
   } else {
     const get = (k: string) => { const v = form.get(k); return v === null || v === '' ? null : String(v).trim(); };
-    const tarifa = form.get('tarifa_base');
-    const tarifaNum = tarifa === null || tarifa === '' ? null : Number(tarifa) || null;
     const id = newId();
     const ts = now();
+    // Empresa, ciudad y tarifa quedaron deprecados (Lili paga por proyecto,
+    // no por tarifa base). Las columnas siguen en BD por compat pero no se
+    // capturan ya. Se insertan NULL.
     await db
       .prepare(
         `INSERT INTO proveedores_directorio
-           (id, nombre, tipo, email, whatsapp, instagram, empresa, rfc, tarifa_base, tarifa_unidad, ciudad, notas, activo, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+           (id, nombre, tipo, email, whatsapp, instagram, rfc, notas, activo, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
       )
-      .bind(id, nombre, get('tipo'), get('email'), get('whatsapp'), get('instagram'), get('empresa'), get('rfc'), tarifaNum, get('tarifa_unidad'), get('ciudad'), get('notas'), ts, ts)
+      .bind(id, nombre, get('tipo'), get('email'), get('whatsapp'), get('instagram'), get('rfc'), get('notas'), ts, ts)
       .run();
     await logAudit(db, { user, accion: 'create', entidad: 'reparto', entidad_id: id, entidad_label: nombre, payload: { tipo: get('tipo') } });
     return Astro.redirect(`/proveedores/personas/${id}`);
@@ -74,7 +75,7 @@ if (filtroActivo === 'inactivos') where.push('activo = 0');
 if (filtroTipo) { where.push('tipo = ?'); binds.push(filtroTipo); }
 if (search)     { where.push('(nombre LIKE ? OR empresa LIKE ? OR instagram LIKE ?)'); const lk = `%${search}%`; binds.push(lk, lk, lk); }
 
-const sql = `SELECT id, nombre, tipo, email, whatsapp, instagram, empresa, tarifa_base, tarifa_unidad, ciudad, activo
+const sql = `SELECT id, nombre, tipo, email, whatsapp, instagram, activo
              FROM proveedores_directorio
              ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
              ORDER BY tipo, nombre`;
@@ -95,7 +96,6 @@ for (const p of (provs ?? [])) {
   grupos.get(k)!.push(p);
 }
 
-const fmt = (n: number | null) => n ? `$${Math.round(n).toLocaleString('es-MX')}` : '';
 ---
 
 <Layout title="Proveedores" pageTitle="Catálogo de Servicios">
@@ -115,7 +115,7 @@ const fmt = (n: number | null) => n ? `$${Math.round(n).toLocaleString('es-MX')}
   {editable && (
     <details style="background:var(--bg-2);border:1px solid var(--border);padding:18px;margin-bottom:24px">
       <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Dar de alta proveedor</summary>
-      <form method="POST" action="/proveedores/personas" style="margin-top:14px">
+<form method="POST" action="/proveedores/personas" style="margin-top:14px">
         <div class="row">
           <div class="col" style="flex:2">
             <label class="label">Nombre *</label>
@@ -127,10 +127,6 @@ const fmt = (n: number | null) => n ? `$${Math.round(n).toLocaleString('es-MX')}
             <datalist id="tipos_prov">
               {[...new Set([...TIPOS, ...tiposExistentes])].map((t) => <option value={t}></option>)}
             </datalist>
-          </div>
-          <div class="col">
-            <label class="label">Empresa</label>
-            <input class="input" name="empresa" placeholder="Opcional" />
           </div>
         </div>
         <div class="row">
@@ -147,29 +143,9 @@ const fmt = (n: number | null) => n ? `$${Math.round(n).toLocaleString('es-MX')}
             <input class="input" name="instagram" placeholder="usuario" />
           </div>
           <div class="col">
-            <label class="label">Ciudad</label>
-            <input class="input" name="ciudad" />
-          </div>
-        </div>
-        <div class="row">
-          <div class="col">
-            <label class="label">Tarifa base MXN</label>
-            <input class="input" type="number" name="tarifa_base" min="0" step="1" placeholder="Opcional" />
-          </div>
-          <div class="col">
-            <label class="label">Unidad de tarifa</label>
-            <select class="select" name="tarifa_unidad">
-              <option value="">— elegir —</option>
-              <option value="hora">por hora</option>
-              <option value="dia">por día</option>
-              <option value="servicio">por servicio</option>
-            </select>
-          </div>
-          <div class="col">
             <label class="label">RFC</label>
             <input class="input" name="rfc" />
           </div>
-          <div class="col"></div>
         </div>
         <label class="label">Notas internas</label>
         <textarea class="textarea" name="notas" rows="2" placeholder="Disponibilidad, recomendaciones, advertencias..."></textarea>
@@ -217,14 +193,13 @@ const fmt = (n: number | null) => n ? `$${Math.round(n).toLocaleString('es-MX')}
               <a href={`/proveedores/personas/${p.id}`}
                  class="card" style={`display:block;color:inherit;text-decoration:none${!p.activo ? ';opacity:.5' : ''}`}>
                 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-                  <div style="font-weight:600">{p.nombre}{p.empresa && <span class="text-muted" style="font-weight:400;font-size:11px"> · {p.empresa}</span>}</div>
+                  <div style="font-weight:600">{p.nombre}</div>
                   {!p.activo && <span class="chip" style="font-size:9px">inactivo</span>}
                 </div>
                 <div class="card-meta" style="margin-top:4px">
                   {p.instagram && <span class="text-muted" style="font-size:11px">@{p.instagram.replace(/^@/, '')}</span>}
                   {p.whatsapp && <span class="text-muted" style="font-size:11px">{p.whatsapp}</span>}
-                  {p.ciudad && <span class="text-muted" style="font-size:11px">{p.ciudad}</span>}
-                  {p.tarifa_base && <span class="mono" style="color:var(--gold);font-size:11px">{fmt(p.tarifa_base)}{p.tarifa_unidad ? '/'+p.tarifa_unidad : ''}</span>}
+                  {p.email && <span class="text-muted" style="font-size:11px">{p.email}</span>}
                 </div>
               </a>
             ))}

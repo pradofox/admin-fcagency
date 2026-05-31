@@ -34,18 +34,16 @@ if (Astro.request.method === 'POST' && editable) {
     error = 'El nombre es obligatorio.';
   } else {
     const get = (k: string) => { const v = form.get(k); return v === null || v === '' ? null : String(v).trim(); };
-    const tarifa = form.get('tarifa_base');
-    const tarifaNum = tarifa === null || tarifa === '' ? null : Number(tarifa) || null;
     const activo = form.get('activo') === '1' ? 1 : 0;
     await db
       .prepare(
         `UPDATE proveedores_directorio
-         SET nombre = ?, tipo = ?, email = ?, whatsapp = ?, instagram = ?, empresa = ?, rfc = ?,
-             tarifa_base = ?, tarifa_unidad = ?, ciudad = ?, notas = ?, activo = ?, updated_at = ?
+         SET nombre = ?, tipo = ?, email = ?, whatsapp = ?, instagram = ?, rfc = ?,
+             notas = ?, activo = ?, updated_at = ?
          WHERE id = ?`
       )
-      .bind(nombre, get('tipo'), get('email'), get('whatsapp'), get('instagram'), get('empresa'), get('rfc'),
-            tarifaNum, get('tarifa_unidad'), get('ciudad'), get('notas'), activo, now(), id)
+      .bind(nombre, get('tipo'), get('email'), get('whatsapp'), get('instagram'), get('rfc'),
+            get('notas'), activo, now(), id)
       .run();
     await logAudit(db, { user, accion: 'update', entidad: 'reparto', entidad_id: id, entidad_label: nombre });
     msgOk = 'Guardado.';
@@ -77,7 +75,6 @@ const fmt = (n: number | null) => n ? `$${Math.round(n).toLocaleString('es-MX')}
       <h1 style="margin:0">{prov.nombre}</h1>
       <div class="card-meta" style="margin-top:4px">
         {prov.tipo && <span class="chip">{prov.tipo}</span>}
-        {prov.empresa && <span class="text-muted">{prov.empresa}</span>}
         {!prov.activo && <span class="chip chip-danger" style="font-size:10px">inactivo</span>}
       </div>
     </div>
@@ -100,10 +97,6 @@ const fmt = (n: number | null) => n ? `$${Math.round(n).toLocaleString('es-MX')}
     <div class="col card">
       <div class="card-meta">Instagram</div>
       <div style="font-weight:600">{prov.instagram ? `@${prov.instagram.replace(/^@/, '')}` : <span class="text-muted">—</span>}</div>
-    </div>
-    <div class="col card">
-      <div class="card-meta">Tarifa base</div>
-      <div class="mono" style="color:var(--gold);font-weight:600">{fmt(prov.tarifa_base)}{prov.tarifa_unidad && prov.tarifa_base ? `/${prov.tarifa_unidad}` : ''}</div>
     </div>
   </div>
 
@@ -133,7 +126,7 @@ const fmt = (n: number | null) => n ? `$${Math.round(n).toLocaleString('es-MX')}
   {editable && (
     <details style="background:var(--bg-2);border:1px solid var(--border);padding:18px;margin-bottom:24px" open>
       <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">Editar datos</summary>
-      <form method="POST" action={`/proveedores/personas/${id}`} style="margin-top:14px">
+<form method="POST" action={`/proveedores/personas/${id}`} style="margin-top:14px">
         <div class="row">
           <div class="col" style="flex:2">
             <label class="label">Nombre *</label>
@@ -145,10 +138,6 @@ const fmt = (n: number | null) => n ? `$${Math.round(n).toLocaleString('es-MX')}
             <datalist id="tipos_prov_edit">
               {tiposCombinados.map((t) => <option value={t}></option>)}
             </datalist>
-          </div>
-          <div class="col">
-            <label class="label">Empresa</label>
-            <input class="input" name="empresa" value={prov.empresa ?? ''} />
           </div>
         </div>
         <div class="row">
@@ -163,23 +152,6 @@ const fmt = (n: number | null) => n ? `$${Math.round(n).toLocaleString('es-MX')}
           <div class="col">
             <label class="label">Instagram</label>
             <input class="input" name="instagram" value={prov.instagram ?? ''} />
-          </div>
-          <div class="col">
-            <label class="label">Ciudad</label>
-            <input class="input" name="ciudad" value={prov.ciudad ?? ''} />
-          </div>
-        </div>
-        <div class="row">
-          <div class="col">
-            <label class="label">Tarifa base MXN</label>
-            <input class="input" type="number" name="tarifa_base" min="0" step="1" value={prov.tarifa_base ?? ''} />
-          </div>
-          <div class="col">
-            <label class="label">Unidad de tarifa</label>
-            <select class="select" name="tarifa_unidad">
-              <option value="">— elegir —</option>
-              {['hora','dia','servicio'].map((u) => <option value={u} selected={prov.tarifa_unidad === u}>por {u}</option>)}
-            </select>
           </div>
           <div class="col">
             <label class="label">RFC</label>
