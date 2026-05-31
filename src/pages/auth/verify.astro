@@ -1,5 +1,6 @@
 ---
-import { consumeTokenAndCreateSession, buildSessionCookie } from '../../lib/auth';
+import Layout from '../../components/Layout.astro';
+import { consumeTokenAndCreateSession } from '../../lib/auth';
 import { getDB } from '../../lib/db';
 
 const token = Astro.url.searchParams.get('token');
@@ -8,19 +9,64 @@ if (!token) {
 }
 
 const db = getDB(Astro);
-const sessionId = await consumeTokenAndCreateSession(db, token);
-if (!sessionId) {
-  return Astro.redirect('/login?error=expired');
+let error: string | null = null;
+
+// Solo consumimos el token en POST. Asi los prefetchers de Gmail/Outlook
+// (que hacen GET al link para escanear seguridad) no lo invalidan antes
+// de que el usuario haga clic en serio.
+if (Astro.request.method === 'POST') {
+  const sessionId = await consumeTokenAndCreateSession(db, token);
+  if (!sessionId) {
+    error = 'Este link ya se usó o expiró. Pide uno nuevo desde la pantalla de login.';
+  } else {
+    const isProd = Astro.url.protocol === 'https:';
+    Astro.cookies.set('fc_session', sessionId, {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isProd,
+      maxAge: 30 * 24 * 60 * 60
+    });
+    return Astro.redirect('/dashboard');
+  }
 }
-
-const isProd = Astro.url.protocol === 'https:';
-Astro.cookies.set('fc_session', sessionId, {
-  path: '/',
-  httpOnly: true,
-  sameSite: 'lax',
-  secure: isProd,
-  maxAge: 30 * 24 * 60 * 60
-});
-
-return Astro.redirect('/dashboard');
 ---
+
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Confirmar acceso — FC Admin</title>
+  <link rel="stylesheet" href="/_styles/global.css" />
+  <style>
+    body { background:#080808; color:#F5F5F5; font-family:'Inter',system-ui,sans-serif; margin:0; padding:60px 20px; min-height:100vh; display:flex; align-items:center; justify-content:center }
+    .box { max-width:440px; background:#0E0E0E; border:1px solid #262626; border-radius:6px; padding:40px 36px; text-align:center }
+    h1 { font-size:18px; margin:0 0 16px; font-weight:600 }
+    p  { font-size:13px; line-height:1.6; color:#B3B3B3; margin:0 0 28px }
+    button { background:#FFFFFF; color:#000; border:0; padding:11px 28px; font-size:13px; font-weight:600; border-radius:4px; cursor:pointer; font-family:inherit }
+    button:hover { background:#E5E5E5 }
+    .err { color:#F87171; font-size:13px; margin-bottom:24px }
+    .foot { font-size:11px; color:#808080; margin-top:24px }
+    a { color:#E5E5E5 }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>Confirmar acceso a FC Admin</h1>
+    {error ? (
+      <>
+        <p class="err">{error}</p>
+        <a href="/login" style="display:inline-block;background:#FFFFFF;color:#000;padding:11px 28px;font-size:13px;font-weight:600;border-radius:4px;text-decoration:none">Ir a login</a>
+      </>
+    ) : (
+      <>
+        <p>Da un clic más para entrar a la plataforma. Esto evita que filtros de seguridad de correo consuman tu link sin querer.</p>
+        <form method="POST" action={`/auth/verify?token=${token}`}>
+          <button type="submit">Entrar</button>
+        </form>
+        <p class="foot">Tu sesión durará 30 días en este dispositivo.</p>
+      </>
+    )}
+  </div>
+</body>
+</html>
