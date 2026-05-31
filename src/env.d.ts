@@ -16,6 +16,7 @@ export interface SessionUser {
   nombre: string;
   rol: 'admin' | 'editor' | 'viewer';
   marcas: string[];
+  solo_district: boolean;
 }
 
 declare namespace App {

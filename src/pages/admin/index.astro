@@ -6,6 +6,23 @@ import { logAudit } from '../../lib/audit';
 import { inviteUser } from '../../lib/auth';
 import { sendEmail, buildInvitationHtml } from '../../lib/email';
 
+// Mapeo de "perfil" (lo que el admin elige en UI) -> { rol, solo_district }
+// Los valores 'admin' / 'editor' / 'viewer' van directo al CHECK de la DB,
+// 'district' es el alias para editor + solo_district=1.
+const PERFILES: Record<string, { rol: 'admin' | 'editor' | 'viewer'; solo_district: number; label: string }> = {
+  admin:    { rol: 'admin',  solo_district: 0, label: 'Admin' },
+  editor:   { rol: 'editor', solo_district: 0, label: 'Project Manager' },
+  district: { rol: 'editor', solo_district: 1, label: 'Encargada District' },
+  viewer:   { rol: 'viewer', solo_district: 0, label: 'Team' },
+};
+
+function perfilDeUser(rol: string, soloDistrict: number): string {
+  if (rol === 'admin')  return 'admin';
+  if (rol === 'viewer') return 'viewer';
+  if (rol === 'editor') return soloDistrict ? 'district' : 'editor';
+  return rol;
+}
+
 const user = requireAdmin(Astro);
 const db = getDB(Astro);
 
@@ -20,30 +37,30 @@ if (Astro.request.method === 'POST') {
   if (action === 'invitar') {
     const email = (form.get('email') as string)?.trim().toLowerCase() || '';
     const nombre = (form.get('nombre') as string)?.trim() || '';
-    const rol = (form.get('rol') as string) || 'viewer';
+    const perfilKey = (form.get('perfil') as string) || 'viewer';
+    const perfil = PERFILES[perfilKey];
     if (!email || !nombre) {
       mensajeError = 'Email y nombre son obligatorios.';
-    } else if (!['admin', 'editor', 'viewer'].includes(rol)) {
-      mensajeError = 'Rol invalido.';
+    } else if (!perfil) {
+      mensajeError = 'Perfil invalido.';
     } else {
-      const res = await inviteUser(db as any, email, nombre, rol as any);
+      const res = await inviteUser(db as any, email, nombre, perfil.rol, !!perfil.solo_district);
       if ('error' in res) {
         mensajeError = res.error;
       } else {
-        // Construir el link y mandar el correo
         const origin = Astro.url.origin;
         const link = `${origin}/auth/verify?token=${res.token}`;
         const runtime = (Astro.locals as any).runtime;
         const apiKey = runtime?.env?.RESEND_API_KEY;
-        const html = buildInvitationHtml(link, nombre, labelRol(rol), user.nombre);
-        const sendRes = await sendEmail({ to: email, subject: `Invitación a FC Admin como ${labelRol(rol)}`, html }, apiKey);
-        await logAudit(db, { user, accion: 'create', entidad: 'usuario', entidad_id: res.userId, entidad_label: `${nombre} (${email})`, payload: { rol, status: res.status, email_enviado: sendRes.ok } });
+        const html = buildInvitationHtml(link, nombre, perfil.label, user.nombre);
+        const sendRes = await sendEmail({ to: email, subject: `Invitación a FC Admin como ${perfil.label}`, html }, apiKey);
+        await logAudit(db, { user, accion: 'create', entidad: 'usuario', entidad_id: res.userId, entidad_label: `${nombre} (${email})`, payload: { perfil: perfilKey, rol: perfil.rol, solo_district: perfil.solo_district, status: res.status, email_enviado: sendRes.ok } });
         if (sendRes.ok) {
           mensaje = res.status === 'ya_existia'
-            ? `${nombre} ya tenía cuenta; rol actualizado a ${labelRol(rol)} y se mandó link nuevo a ${email}.`
-            : `Invitación enviada a ${email} con rol ${labelRol(rol)} (válida 24 horas).`;
+            ? `${nombre} ya tenía cuenta; perfil actualizado a ${perfil.label} y se mandó link nuevo a ${email}.`
+            : `Invitación enviada a ${email} con perfil ${perfil.label} (válida 24 horas).`;
         } else {
-          mensaje = `Cuenta creada con rol ${labelRol(rol)}, pero el envío de email falló: ${sendRes.error}. Link manual: ${link}`;
+          mensaje = `Cuenta creada con perfil ${perfil.label}, pero el envío de email falló: ${sendRes.error}. Link manual: ${link}`;
         }
       }
     }
@@ -55,12 +72,16 @@ if (Astro.request.method === 'POST') {
     : null;
   const label = target ? `${target.nombre} (${target.email})` : null;
 
-  if (action === 'change_rol') {
-    const nuevoRol = form.get('rol') as string;
-    if (['admin', 'editor', 'viewer'].includes(nuevoRol)) {
-      await db.prepare('UPDATE users SET rol = ?, updated_at = ? WHERE id = ?').bind(nuevoRol, now(), userId).run();
-      await logAudit(db, { user, accion: 'rol_change', entidad: 'usuario', entidad_id: userId, entidad_label: label, payload: { de: target?.rol, a: nuevoRol } });
-      mensaje = 'Rol actualizado.';
+  if (action === 'change_perfil') {
+    const perfilKey = form.get('perfil') as string;
+    const perfil = PERFILES[perfilKey];
+    if (perfil) {
+      await db
+        .prepare('UPDATE users SET rol = ?, solo_district = ?, updated_at = ? WHERE id = ?')
+        .bind(perfil.rol, perfil.solo_district, now(), userId)
+        .run();
+      await logAudit(db, { user, accion: 'rol_change', entidad: 'usuario', entidad_id: userId, entidad_label: label, payload: { a: perfilKey, rol: perfil.rol, solo_district: perfil.solo_district } });
+      mensaje = `Perfil actualizado a ${perfil.label}.`;
     }
   } else if (action === 'toggle_activo') {
     const nuevo = form.get('nuevo') as string;
@@ -82,8 +103,8 @@ if (Astro.request.method === 'POST') {
 }
 
 const { results: users } = await db
-  .prepare('SELECT id, email, nombre, rol, marcas, activo, created_at, ultimo_login FROM users ORDER BY created_at DESC')
-  .all<{ id: string; email: string; nombre: string; rol: string; marcas: string | null; activo: number; created_at: number; ultimo_login: number | null }>();
+  .prepare('SELECT id, email, nombre, rol, marcas, activo, created_at, ultimo_login, solo_district FROM users ORDER BY created_at DESC')
+  .all<{ id: string; email: string; nombre: string; rol: string; marcas: string | null; activo: number; created_at: number; ultimo_login: number | null; solo_district: number }>();
 
 const marcas = (await db.prepare('SELECT id, nombre FROM marcas WHERE activa = 1 ORDER BY orden').all<{ id: string; nombre: string }>()).results ?? [];
 
@@ -113,9 +134,10 @@ function nombreMarca(mid: string): string {
   <div class="card" style="margin-bottom:24px;font-size:12px;line-height:1.7">
     <strong style="color:var(--gold)">Roles:</strong>
     <span class="text-muted">
-      <b>admin</b> = todo, incluye catálogo de servicios y ganancias.
-      <b>editor</b> (Project Manager) = todo menos catálogo de servicios y ganancias.
-      <b>viewer</b> (Team) = solo dashboard, modelos, producciones, redes sociales, calendario y tareas. No ve precios.
+      <b>Admin</b> = todo, incluye catálogo de servicios y ganancias.
+      <b>Project Manager</b> = todo menos catálogo de servicios y ganancias.
+      <b>Encargada District</b> = solo District Studio (estudio, cowork, planes, miembros, inventario, pagos district) + dashboard, modelos, calendario y tareas. NO ve cosas de FC Agency (cotizaciones, producciones, briefs, redes, clientes, pagos FC).
+      <b>Team</b> = solo dashboard, modelos, producciones, redes sociales, calendario y tareas. No ve precios.
     </span>
     <br /><span class="text-muted">El scope de marcas se aplica al reiniciar sesión del usuario.</span>
   </div>
@@ -140,9 +162,10 @@ function nombreMarca(mid: string): string {
           <input class="input" type="email" name="email" required placeholder="andrea@fcagency.mx" />
         </div>
         <div class="col">
-          <label class="label">Rol *</label>
-          <select class="select" name="rol" required>
+          <label class="label">Perfil *</label>
+          <select class="select" name="perfil" required>
             <option value="viewer">Team (solo operativo, sin precios)</option>
+            <option value="district">Encargada District (solo District Studio + modelos/calendario)</option>
             <option value="editor" selected>Project Manager (todo menos catálogo y ganancias)</option>
             <option value="admin">Admin (todo)</option>
           </select>
@@ -176,13 +199,18 @@ function nombreMarca(mid: string): string {
             <td style="padding:12px 10px;color:var(--text-2);font-size:12px">{u.email}</td>
             <td style="padding:12px 10px">
               <form method="POST" action="/admin" style="display:inline">
-                <input type="hidden" name="_action" value="change_rol" />
+                <input type="hidden" name="_action" value="change_perfil" />
                 <input type="hidden" name="user_id" value={u.id} />
-                <select name="rol" onchange="this.form.submit()" class="select" style="font-size:12px;padding:5px 8px">
-                  {['admin', 'editor', 'viewer'].map((r) => (
-                    <option value={r} selected={u.rol === r}>{labelRol(r)}</option>
-                  ))}
-                </select>
+                {(() => {
+                  const perfilActual = perfilDeUser(u.rol, u.solo_district);
+                  return (
+                    <select name="perfil" onchange="this.form.submit()" class="select" style="font-size:12px;padding:5px 8px">
+                      {Object.entries(PERFILES).map(([k, p]) => (
+                        <option value={k} selected={perfilActual === k}>{p.label}</option>
+                      ))}
+                    </select>
+                  );
+                })()}
               </form>
             </td>
             <td style="padding:12px 10px">

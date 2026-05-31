@@ -73,7 +73,8 @@ export async function inviteUser(
   db: D1Database,
   email: string,
   nombre: string,
-  rol: 'admin' | 'editor' | 'viewer'
+  rol: 'admin' | 'editor' | 'viewer',
+  soloDistrict: boolean = false
 ): Promise<{ token: string; userId: string; status: 'creado' | 'reactivado' | 'ya_existia' } | { error: string }> {
   const emailNorm = email.trim().toLowerCase();
   if (!emailNorm || !nombre.trim()) return { error: 'Email y nombre son obligatorios.' };
@@ -87,30 +88,29 @@ export async function inviteUser(
   let status: 'creado' | 'reactivado' | 'ya_existia';
   let userId: string;
 
+  const sdFlag = soloDistrict ? 1 : 0;
   if (!user) {
     userId = newId();
     await db
       .prepare(
-        `INSERT INTO users (id, email, nombre, rol, marcas, activo, created_at, updated_at)
-         VALUES (?, ?, ?, ?, '[]', 1, ?, ?)`
+        `INSERT INTO users (id, email, nombre, rol, marcas, activo, solo_district, created_at, updated_at)
+         VALUES (?, ?, ?, ?, '[]', 1, ?, ?, ?)`
       )
-      .bind(userId, emailNorm, nombre.trim(), rol, ts, ts)
+      .bind(userId, emailNorm, nombre.trim(), rol, sdFlag, ts, ts)
       .run();
     status = 'creado';
   } else if (!user.activo) {
-    // Reactivar y actualizar rol/nombre
     userId = user.id;
     await db
-      .prepare('UPDATE users SET nombre = ?, rol = ?, activo = 1, updated_at = ? WHERE id = ?')
-      .bind(nombre.trim(), rol, ts, userId)
+      .prepare('UPDATE users SET nombre = ?, rol = ?, solo_district = ?, activo = 1, updated_at = ? WHERE id = ?')
+      .bind(nombre.trim(), rol, sdFlag, ts, userId)
       .run();
     status = 'reactivado';
   } else {
-    // Ya existe activo: actualiza rol y nombre (sobreescribe), reenvía link.
     userId = user.id;
     await db
-      .prepare('UPDATE users SET nombre = ?, rol = ?, updated_at = ? WHERE id = ?')
-      .bind(nombre.trim(), rol, ts, userId)
+      .prepare('UPDATE users SET nombre = ?, rol = ?, solo_district = ?, updated_at = ? WHERE id = ?')
+      .bind(nombre.trim(), rol, sdFlag, ts, userId)
       .run();
     status = 'ya_existia';
   }
@@ -166,13 +166,13 @@ export async function getSessionUser(db: D1Database, sessionId: string | null): 
   const ts = now();
   const row = await db
     .prepare(
-      `SELECT u.id, u.email, u.nombre, u.rol, u.marcas, u.activo, s.expires_at
+      `SELECT u.id, u.email, u.nombre, u.rol, u.marcas, u.activo, u.solo_district, s.expires_at
        FROM sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.id = ?`
     )
     .bind(sessionId)
-    .first<UserRow & { expires_at: number }>();
+    .first<UserRow & { expires_at: number; solo_district: number }>();
   if (!row) return null;
   if (row.expires_at < ts) return null;
   if (!row.activo) return null;
@@ -189,7 +189,8 @@ export async function getSessionUser(db: D1Database, sessionId: string | null): 
     email: row.email,
     nombre: row.nombre,
     rol: row.rol,
-    marcas
+    marcas,
+    solo_district: !!row.solo_district
   };
 }
 

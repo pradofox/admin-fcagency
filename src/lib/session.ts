@@ -24,7 +24,8 @@ export function requireAdmin(context: APIContext | AstroGlobal): SessionUser {
   return user;
 }
 
-/** True si el user puede escribir (admin o editor). */
+/** True si el user puede escribir (admin o editor). solo_district sigue
+ * pudiendo editar mientras su rol sea admin o editor. */
 export function canEdit(user: SessionUser | null): boolean {
   return user?.rol === 'admin' || user?.rol === 'editor';
 }
@@ -35,9 +36,9 @@ export function isAdmin(user: SessionUser | null): boolean {
 }
 
 /**
- * True si el user puede ver precios / cobros / pagos en general.
- * Admin y editor (PM) sí. Viewer (team) no — ve producciones, modelos,
- * etc. pero sin montos.
+ * True si el user puede ver precios / cobros / pagos de FC Agency.
+ * Admin y editor (PM) sí. Viewer (team) no. District tampoco
+ * (los precios de District los maneja en su seccion district/pagos).
  */
 export function canSeePrecios(user: SessionUser | null): boolean {
   return user?.rol === 'admin' || user?.rol === 'editor';
@@ -45,20 +46,30 @@ export function canSeePrecios(user: SessionUser | null): boolean {
 
 /** Etiqueta humana del rol (para UI). */
 export function labelRol(rol: string): string {
-  if (rol === 'admin')  return 'Admin';
-  if (rol === 'editor') return 'Project Manager';
-  if (rol === 'viewer') return 'Team';
+  if (rol === 'admin')    return 'Admin';
+  if (rol === 'editor')   return 'Project Manager';
+  if (rol === 'viewer')   return 'Team';
   return rol;
 }
 
+/** Etiqueta del "perfil" del user considerando el flag solo_district. */
+export function labelPerfil(user: SessionUser | null): string {
+  if (!user) return '—';
+  if (user.solo_district) return 'Encargada District';
+  return labelRol(user.rol);
+}
+
 /**
- * Visibilidad de secciones por rol. Conceptualmente:
+ * Visibilidad de secciones por rol.
  *   admin   = todo (incluye utilidades / margen / catalogo / pagos).
  *   editor  = Project Manager. Todo MENOS catalogo de servicios y margen.
  *   viewer  = Team. Solo modelos, producciones, redes sociales, calendario.
  *             Sin precios, sin pagos, sin cotizaciones, sin catalogo.
  *
- * Devuelve true si el rol del user puede entrar a la seccion dada.
+ * Si el user tiene solo_district = true, ademas se le restringe el acceso
+ * a la seccion district + auxiliares (dashboard/modelos/calendario/tareas)
+ * sin importar su rol. Asi un editor con solo_district = "Encargada
+ * District Studio".
  */
 const VISIBILIDAD: Record<string, Array<'admin' | 'editor' | 'viewer'>> = {
   dashboard:    ['admin', 'editor', 'viewer'],
@@ -76,14 +87,20 @@ const VISIBILIDAD: Record<string, Array<'admin' | 'editor' | 'viewer'>> = {
   briefs:       ['admin', 'editor'],
   district:     ['admin', 'editor'],
 
-  proveedores:  ['admin'],   // catalogo de servicios solo admin
+  proveedores:  ['admin'],
   admin:        ['admin'],
 };
 
+// Si solo_district esta activo, solo estas secciones son accesibles
+const SECCIONES_DISTRICT_ONLY = new Set([
+  'dashboard', 'district', 'modelos', 'calendario', 'tareas'
+]);
+
 export function canViewSection(user: SessionUser | null, section: string): boolean {
   if (!user) return false;
+  if (user.solo_district && !SECCIONES_DISTRICT_ONLY.has(section)) return false;
   const roles = VISIBILIDAD[section];
-  if (!roles) return true; // si la seccion no esta listada, libre
+  if (!roles) return true;
   return roles.includes(user.rol as any);
 }
 
