@@ -701,7 +701,7 @@ const ESTADOS_FLUJO = [
             <label class="label" id="lbl_cantidad_cat">Cantidad</label>
             <input class="input" type="number" name="cantidad" id="inp_cantidad_cat" min="1" step="1" value="1" onchange="onProvChange()" oninput="onProvChange()" style="width:120px" />
           </div>
-          <div style="min-width:90px;display:none" id="col_horas_cat">
+          <div style="min-width:90px" id="col_horas_cat">
             <label class="label" id="lbl_horas_cat">Horas</label>
             <input class="input" type="number" name="horas" id="inp_horas_cat" min="1" step="0.5" value="1" onchange="onProvChange()" oninput="onProvChange()" style="width:120px" />
           </div>
@@ -1035,12 +1035,15 @@ function onProvChange() {
   const porHora = horaAd != null && horaAd > 0;
   const esPorHora = !!concepto.por_hora || porHora;
 
-  // Mostrar el campo Horas solo si el concepto se cobra por hora.
+  // Campo Horas SIEMPRE visible (por default). Solo lo ocultamos si el
+  // concepto definitivamente no se cobra por hora — esto es mas seguro
+  // para que Lili pueda capturar horas en conceptos de modelo aunque la
+  // configuracion de por_hora se quede atras por algun caching.
   const colHoras = document.getElementById('col_horas_cat');
-  if (colHoras) colHoras.style.display = esPorHora ? 'block' : 'none';
+  if (colHoras) colHoras.style.display = '';
 
   // Labels mas claras cuando el concepto es de modelo
-  const esModelo = /modelo/i.test(concepto.rol ?? '') || /modelo/i.test(concepto.nombre ?? '');
+  const esModelo = /modelo/i.test(String(concepto.rol || '')) || /modelo/i.test(String(concepto.nombre || ''));
   const lblCant = document.getElementById('lbl_cantidad_cat');
   const lblHoras = document.getElementById('lbl_horas_cat');
   if (lblCant)  lblCant.textContent  = esModelo ? 'Cantidad de modelos' : 'Cantidad';
