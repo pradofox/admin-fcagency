@@ -54,25 +54,29 @@ if (Astro.request.method === 'POST' && editable) {
     if (!concepto) {
       error = 'Concepto no encontrado.';
     } else {
-      // Regla de negocio FC: TODO concepto de modelo (cualquier tipo) sigue
-      // la tarifa tier: 1ª hora por modelo = $1,000, cada hora extra por
-      // modelo = $800. Hardcoded — no depende de lo configurado en BD.
-      // Para los demas conceptos, se usa precio × cantidad (sin horas).
-      const esModelo = /modelo/i.test(String(concepto.rol ?? '')) || /modelo/i.test(String(concepto.nombre ?? ''));
+      // Regla de negocio FC: solo "modelo editorial" sigue la tarifa tier
+      // $1,000 (1ra hora) + $800 (cada hora extra) por modelo. Hardcoded.
+      // Modelo de pasarela y otros tipos de modelo cobran por unidad/dia
+      // segun el precio del concepto (sin horas).
+      const nombreTxt = String(concepto.nombre ?? '');
+      const rolTxt    = String(concepto.rol ?? '');
+      const categTxt  = String(concepto.categoria ?? '');
+      const blob      = `${nombreTxt} ${rolTxt} ${categTxt}`.toLowerCase();
+      const esModeloEditorial = /modelo/i.test(blob) && /editorial/i.test(blob);
       const TARIFA_MODELO_1HR = 1000;
       const TARIFA_MODELO_EXTRA = 800;
-      const precioBase = esModelo ? TARIFA_MODELO_1HR : (concepto.precio_mxn ?? 0);
-      const horaAd    = esModelo ? TARIFA_MODELO_EXTRA : (concepto.precio_hora_adicional ?? null);
-      const porHora   = esModelo || (horaAd != null && horaAd > 0);
+      const precioBase = esModeloEditorial ? TARIFA_MODELO_1HR : (concepto.precio_mxn ?? 0);
+      const horaAd    = esModeloEditorial ? TARIFA_MODELO_EXTRA : (concepto.precio_hora_adicional ?? null);
+      const porHora   = esModeloEditorial || (horaAd != null && horaAd > 0);
 
       const cantRaw  = form.get('cantidad');
       const cantidad = cantRaw === null || cantRaw === '' ? 1 : Math.max(1, Number(cantRaw) || 1);
       const horasRaw = form.get('horas');
-      const horas    = !esModelo ? 1 : (horasRaw === null || horasRaw === '' ? 1 : Math.max(1, Number(horasRaw) || 1));
+      const horas    = !esModeloEditorial ? 1 : (horasRaw === null || horasRaw === '' ? 1 : Math.max(1, Number(horasRaw) || 1));
 
-      // Subtotal de la linea:
-      // Modelos:  cantidad × (1,000 + (horas-1) × 800)
-      // Otros:    precio × cantidad
+      // Subtotal:
+      // Modelo editorial: cantidad × (1,000 + (horas-1) × 800)
+      // Otros (incluye modelo pasarela, foto por modelo, etc.): precio × cantidad
       const subtotal = porHora
         ? cantidad * (horas > 1 ? precioBase + (horas - 1) * horaAd! : precioBase)
         : precioBase * cantidad;
@@ -682,19 +686,25 @@ const ESTADOS_FLUJO = [
 
     {!lineas.length && <p class="text-muted">Sin líneas aún. Agrega conceptos del catálogo abajo.</p>}
 
-    {/* ── Agregar desde el catálogo: dos forms separados (modelos y servicios) ── */}
+    {/* ── Agregar desde el catálogo: dos forms separados (modelo editorial y resto) ── */}
     {editable && cot.estado !== 'convertida' && proveedoresData.length > 0 && (() => {
-      const esModelo = (c: any) => /modelo/i.test(String(c.rol || '')) || /modelo/i.test(String(c.nombre || ''));
-      const conceptosModelo  = proveedoresData.filter(esModelo);
-      const conceptosServicio = proveedoresData.filter((c: any) => !esModelo(c));
+      // Solo "modelo editorial" usa la tarifa tier por horas. Modelo pasarela,
+      // foto por modelo, etc. cobran por unidad/dia y van al form de servicios.
+      const esModeloEditorial = (c: any) => {
+        const blob = `${c.nombre || ''} ${c.rol || ''} ${c.categoria || ''}`.toLowerCase();
+        return /modelo/i.test(blob) && /editorial/i.test(blob);
+      };
+      const conceptosModelo  = proveedoresData.filter(esModeloEditorial);
+      const conceptosServicio = proveedoresData.filter((c: any) => !esModeloEditorial(c));
       return (
         <div style="margin-bottom:12px">
           {/* ── FORM 1: AGREGAR MODELOS (con campo Horas) ── */}
           {conceptosModelo.length > 0 && (
             <details style="background:var(--bg-2);border:1px solid var(--border);padding:16px;margin-bottom:10px" open>
-              <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Agregar modelos a la cotización</summary>
+              <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Agregar modelos editoriales a la cotización</summary>
               <p class="text-muted" style="font-size:11px;margin:8px 0 12px">
-                Tarifa fija para todos los conceptos de modelo: <strong>1ª hora = $1,000</strong> · <strong>cada hora extra = $800</strong> (por modelo).
+                Modelo de <strong>producción editorial</strong>: <strong>1ª hora = $1,000</strong> · <strong>cada hora extra = $800</strong> (por modelo).
+                <br />Modelo de <strong>pasarela</strong> y "foto por modelo" se cobran por unidad/día abajo en "Agregar servicio".
               </p>
               <form method="POST" action={`/cotizaciones/${id}`} style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
                 <input type="hidden" name="_action" value="add_concepto" />
