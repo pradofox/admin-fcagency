@@ -35,6 +35,23 @@ export function isAdmin(user: SessionUser | null): boolean {
 }
 
 /**
+ * True si el user puede ver precios / cobros / pagos en general.
+ * Admin y editor (PM) sí. Viewer (team) no — ve producciones, modelos,
+ * etc. pero sin montos.
+ */
+export function canSeePrecios(user: SessionUser | null): boolean {
+  return user?.rol === 'admin' || user?.rol === 'editor';
+}
+
+/** Etiqueta humana del rol (para UI). */
+export function labelRol(rol: string): string {
+  if (rol === 'admin')  return 'Admin';
+  if (rol === 'editor') return 'Project Manager';
+  if (rol === 'viewer') return 'Team';
+  return rol;
+}
+
+/**
  * Visibilidad de secciones por rol. Conceptualmente:
  *   admin   = todo (incluye utilidades / margen / catalogo / pagos).
  *   editor  = Project Manager. Todo MENOS catalogo de servicios y margen.

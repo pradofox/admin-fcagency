@@ -1,6 +1,6 @@
 ---
 import Layout from '../../components/Layout.astro';
-import { requireAdmin } from '../../lib/session';
+import { requireAdmin, labelRol } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { logAudit } from '../../lib/audit';
 
@@ -109,7 +109,7 @@ function nombreMarca(mid: string): string {
                 <input type="hidden" name="user_id" value={u.id} />
                 <select name="rol" onchange="this.form.submit()" class="select" style="font-size:12px;padding:5px 8px">
                   {['admin', 'editor', 'viewer'].map((r) => (
-                    <option value={r} selected={u.rol === r}>{r}</option>
+                    <option value={r} selected={u.rol === r}>{labelRol(r)}</option>
                   ))}
                 </select>
               </form>

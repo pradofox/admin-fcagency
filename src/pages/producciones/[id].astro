@@ -2,7 +2,7 @@
 import Layout from '../../components/Layout.astro';
 import ProduccionForm from '../../components/producciones/ProduccionForm.astro';
 import NotasTimeline from '../../components/NotasTimeline.astro';
-import { requireUser, canEdit } from '../../lib/session';
+import { requireUser, canEdit, canSeePrecios } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 import { formatFecha } from '../../lib/fechas';
@@ -10,8 +10,9 @@ import { enviarAvisosProduccion, recolectarDestinatarios, type GrupoAviso } from
 import { logAudit } from '../../lib/audit';
 
 const user = requireUser(Astro);
-// produccion es visible para todos los roles, pero igual usamos el helper
-// para consistencia y para que el bloqueo se respete si cambia el mapa.
+const verPrecios = canSeePrecios(user);
+// produccion es visible para todos los roles, pero los montos se ocultan
+// para viewer (Team) que no debe ver costos/cobros.
 const editable = canEdit(user);
 const db = getDB(Astro);
 const { id } = Astro.params;
@@ -361,10 +362,12 @@ const ROLES = [
         <div class="ficha-label">Ubicación shoot</div>
         <div class="ficha-val">{prod.ubicacion_shoot ?? <span class="text-muted">—</span>}</div>
       </div>
-      <div class="ficha-item">
-        <div class="ficha-label">Presupuesto</div>
-        <div class="ficha-val mono" style="color:var(--gold)">{prod.presupuesto ? fmt(prod.presupuesto) : '—'}</div>
-      </div>
+      {verPrecios && (
+        <div class="ficha-item">
+          <div class="ficha-label">Presupuesto</div>
+          <div class="ficha-val mono" style="color:var(--gold)">{prod.presupuesto ? fmt(prod.presupuesto) : '—'}</div>
+        </div>
+      )}
       <div class="ficha-item">
         <div class="ficha-label">Equipo involucrado</div>
         <div class="ficha-val">{prod.equipo_involucrado ?? <span class="text-muted">—</span>}</div>
@@ -483,30 +486,34 @@ const ROLES = [
 
   <h2>Estado de post-producción</h2>
   <div class="row" style="margin-bottom:32px">
-    <div class="col card">
-      <div class="card-meta">Pago cliente</div>
-      <form method="POST" action={`/producciones/${id}`} style="margin-top:8px">
-        <input type="hidden" name="_action" value="update_semaforo" />
-        <input type="hidden" name="field" value="pago_cliente_estado" />
-        <select class="select" name="value" onchange="this.form.submit()" style="font-size:13px" disabled={!editable}>
-          {['pendiente', 'anticipo_recibido', 'pagado', 'no_aplica'].map((e) => (
-            <option value={e} selected={(prod.pago_cliente_estado ?? 'pendiente') === e}>{e.replace(/_/g, ' ')}</option>
-          ))}
-        </select>
-      </form>
-    </div>
-    <div class="col card">
-      <div class="card-meta">Pago modelo</div>
-      <form method="POST" action={`/producciones/${id}`} style="margin-top:8px">
-        <input type="hidden" name="_action" value="update_semaforo" />
-        <input type="hidden" name="field" value="pago_modelo_estado" />
-        <select class="select" name="value" onchange="this.form.submit()" style="font-size:13px" disabled={!editable}>
-          {['por_pagar', 'pagado', 'no_aplica'].map((e) => (
-            <option value={e} selected={(prod.pago_modelo_estado ?? 'por_pagar') === e}>{e.replace(/_/g, ' ')}</option>
-          ))}
-        </select>
-      </form>
-    </div>
+    {verPrecios && (
+      <div class="col card">
+        <div class="card-meta">Pago cliente</div>
+        <form method="POST" action={`/producciones/${id}`} style="margin-top:8px">
+          <input type="hidden" name="_action" value="update_semaforo" />
+          <input type="hidden" name="field" value="pago_cliente_estado" />
+          <select class="select" name="value" onchange="this.form.submit()" style="font-size:13px" disabled={!editable}>
+            {['pendiente', 'anticipo_recibido', 'pagado', 'no_aplica'].map((e) => (
+              <option value={e} selected={(prod.pago_cliente_estado ?? 'pendiente') === e}>{e.replace(/_/g, ' ')}</option>
+            ))}
+          </select>
+        </form>
+      </div>
+    )}
+    {verPrecios && (
+      <div class="col card">
+        <div class="card-meta">Pago modelo</div>
+        <form method="POST" action={`/producciones/${id}`} style="margin-top:8px">
+          <input type="hidden" name="_action" value="update_semaforo" />
+          <input type="hidden" name="field" value="pago_modelo_estado" />
+          <select class="select" name="value" onchange="this.form.submit()" style="font-size:13px" disabled={!editable}>
+            {['por_pagar', 'pagado', 'no_aplica'].map((e) => (
+              <option value={e} selected={(prod.pago_modelo_estado ?? 'por_pagar') === e}>{e.replace(/_/g, ' ')}</option>
+            ))}
+          </select>
+        </form>
+      </div>
+    )}
     <div class="col card">
       <div class="card-meta">Material</div>
       <form method="POST" action={`/producciones/${id}`} style="margin-top:8px">
@@ -545,9 +552,9 @@ const ROLES = [
             <th>Rol</th>
             <th>Nombre</th>
             <th>Llamado</th>
-            <th class="right">Cobro</th>
-            <th class="right">Comisión</th>
-            <th class="right">Pago</th>
+            {verPrecios && <th class="right">Cobro</th>}
+            {verPrecios && <th class="right">Comisión</th>}
+            {verPrecios && <th class="right">Pago</th>}
             <th>Estado</th>
             <th></th>
           </tr>
@@ -558,9 +565,9 @@ const ROLES = [
               <td><span class="chip">{l.rol}</span></td>
               <td>{l.nombre_libre ?? <span class="text-muted">—</span>}</td>
               <td class="mono text-muted">{l.hora_llamado ?? '—'}</td>
-              <td class="right mono">{fmt(l.cobro_cliente)}</td>
-              <td class="right mono text-muted">{l.comision_pct}%</td>
-              <td class="right mono text-gold">{fmt(l.pago_proveedor)}</td>
+              {verPrecios && <td class="right mono">{fmt(l.cobro_cliente)}</td>}
+              {verPrecios && <td class="right mono text-muted">{l.comision_pct}%</td>}
+              {verPrecios && <td class="right mono text-gold">{fmt(l.pago_proveedor)}</td>}
               <td>
                 {editable ? (
                   <form method="POST" action={`/producciones/${id}`} style="display:inline">

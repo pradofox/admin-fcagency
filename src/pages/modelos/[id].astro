@@ -1,13 +1,14 @@
 ---
 import Layout from '../../components/Layout.astro';
 import ModeloForm from '../../components/modelos/ModeloForm.astro';
-import { requireUser, canEdit } from '../../lib/session';
+import { requireUser, canEdit, canSeePrecios } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { formatFecha, calcularEdad, cumpleCorto, diasAlCumple } from '../../lib/fechas';
 import { logAudit } from '../../lib/audit';
 
 const user = requireUser(Astro);
 const editable = canEdit(user);
+const verPrecios = canSeePrecios(user);
 const db = getDB(Astro);
 const { id } = Astro.params;
 
@@ -304,7 +305,7 @@ const colorEstado: Record<string, string> = {
               <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Tipo</th>
               <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Cliente</th>
               <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Horas</th>
-              <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Pago</th>
+              {verPrecios && <th style="padding:10px;font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2);text-align:right">Pago</th>}
             </tr>
           </thead>
           <tbody>
@@ -314,7 +315,7 @@ const colorEstado: Record<string, string> = {
                 <td style="padding:10px">{t.tipo}</td>
                 <td style="padding:10px">{t.cliente ?? '—'}</td>
                 <td style="padding:10px;text-align:right">{t.horas ?? '—'}</td>
-                <td style="padding:10px;text-align:right;color:var(--gold)">{t.pago_mxn ? `$${Math.round(t.pago_mxn).toLocaleString('es-MX')}` : '—'}</td>
+                {verPrecios && <td style="padding:10px;text-align:right;color:var(--gold)">{t.pago_mxn ? `$${Math.round(t.pago_mxn).toLocaleString('es-MX')}` : '—'}</td>}
               </tr>
             ))}
           </tbody>

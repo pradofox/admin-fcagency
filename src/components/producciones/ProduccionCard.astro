@@ -1,5 +1,6 @@
 ---
 import { formatFecha } from '../../lib/fechas';
+import { getUser, canSeePrecios } from '../../lib/session';
 
 interface Props {
   produccion: {
@@ -21,6 +22,7 @@ interface Props {
   };
 }
 const { produccion } = Astro.props;
+const verPrecios = canSeePrecios(getUser(Astro));
 
 const chipClass: Record<string, string> = {
   planeacion: 'chip',
@@ -48,7 +50,7 @@ const retroPendiente = !produccion.retro_enviada;
       {produccion.cliente_nombre && <span>{produccion.cliente_nombre}</span>}
       {produccion.fecha_inicio && <span class="mono">{formatFecha(produccion.fecha_inicio)}</span>}
       {produccion.ubicacion_shoot && <span class="text-muted">{produccion.ubicacion_shoot}</span>}
-      {produccion.total_cobro && <span class="text-muted">{fmt(produccion.total_cobro)}</span>}
+      {verPrecios && produccion.total_cobro && <span class="text-muted">{fmt(produccion.total_cobro)}</span>}
     </div>
     {(produccion.fecha_proxima_accion || produccion.proximo_paso) && (
       <div class="card-meta" style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">
@@ -56,10 +58,10 @@ const retroPendiente = !produccion.retro_enviada;
         {produccion.proximo_paso && <span class="text-muted">{produccion.proximo_paso}</span>}
       </div>
     )}
-    {(pagoClientePendiente || pagoModeloPendiente || materialPendiente || retroPendiente) && (
+    {((verPrecios && (pagoClientePendiente || pagoModeloPendiente)) || materialPendiente || retroPendiente) && (
       <div class="card-meta" style="margin-top:8px">
-        {pagoClientePendiente && <span class="chip chip-warning" style="font-size:10px">cliente $</span>}
-        {pagoModeloPendiente && <span class="chip chip-warning" style="font-size:10px">modelos $</span>}
+        {verPrecios && pagoClientePendiente && <span class="chip chip-warning" style="font-size:10px">cliente $</span>}
+        {verPrecios && pagoModeloPendiente && <span class="chip chip-warning" style="font-size:10px">modelos $</span>}
         {materialPendiente && <span class="chip chip-warning" style="font-size:10px">material</span>}
         {retroPendiente && <span class="chip chip-warning" style="font-size:10px">retro</span>}
       </div>
