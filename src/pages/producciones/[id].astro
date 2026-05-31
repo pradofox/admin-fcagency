@@ -2,7 +2,7 @@
 import Layout from '../../components/Layout.astro';
 import ProduccionForm from '../../components/producciones/ProduccionForm.astro';
 import NotasTimeline from '../../components/NotasTimeline.astro';
-import { requireUser, canEdit, canSeePrecios } from '../../lib/session';
+import { requireUser, canEdit, canSeePrecios, isAdmin } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 import { formatFecha } from '../../lib/fechas';
@@ -10,6 +10,7 @@ import { enviarAvisosProduccion, recolectarDestinatarios, type GrupoAviso } from
 import { logAudit } from '../../lib/audit';
 
 const user = requireUser(Astro);
+const esAdmin = isAdmin(user);
 const verPrecios = canSeePrecios(user);
 // produccion es visible para todos los roles, pero los montos se ocultan
 // para viewer (Team) que no debe ver costos/cobros.
@@ -74,15 +75,20 @@ if (Astro.request.method === 'POST' && editable) {
   }
 
   if (action === 'toggle_cerrada') {
-    const prev = await db.prepare('SELECT titulo, cerrada FROM producciones WHERE id = ?').bind(id).first<{ titulo: string; cerrada: number }>();
-    const nuevoEstado = prev?.cerrada ? 0 : 1;
-    const ts = now();
-    await db
-      .prepare('UPDATE producciones SET cerrada = ?, cerrada_en = ?, updated_at = ? WHERE id = ?')
-      .bind(nuevoEstado, nuevoEstado ? ts : null, ts, id)
-      .run();
-    await logAudit(db, { user, accion: 'state_change', entidad: 'produccion', entidad_id: id, entidad_label: prev?.titulo ?? null, payload: { cerrada: nuevoEstado } });
-    return Astro.redirect(`/producciones/${id}`);
+    // Cerrar / reabrir produccion solo admin (PM y demas no pueden).
+    if (!isAdmin(user)) {
+      error = 'Solo el admin puede cerrar o reabrir producciones.';
+    } else {
+      const prev = await db.prepare('SELECT titulo, cerrada FROM producciones WHERE id = ?').bind(id).first<{ titulo: string; cerrada: number }>();
+      const nuevoEstado = prev?.cerrada ? 0 : 1;
+      const ts = now();
+      await db
+        .prepare('UPDATE producciones SET cerrada = ?, cerrada_en = ?, updated_at = ? WHERE id = ?')
+        .bind(nuevoEstado, nuevoEstado ? ts : null, ts, id)
+        .run();
+      await logAudit(db, { user, accion: 'state_change', entidad: 'produccion', entidad_id: id, entidad_label: prev?.titulo ?? null, payload: { cerrada: nuevoEstado } });
+      return Astro.redirect(`/producciones/${id}`);
+    }
   }
 
   if (action === 'add_linea') {
@@ -533,7 +539,7 @@ const ROLES = [
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap">
       <a href="/producciones" class="btn btn-sm">Volver</a>
-      {editable && (
+      {esAdmin && (
         <form method="POST" action={`/producciones/${id}`} style="display:inline"
               onsubmit={`return confirm('${prod.cerrada ? "¿Reabrir esta producción?" : "¿Cerrar esta producción? Marca el proyecto como saldado y archivado. Puedes reabrirlo después si hace falta."}')`}>
           <input type="hidden" name="_action" value="toggle_cerrada" />
