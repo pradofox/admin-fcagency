@@ -12,23 +12,43 @@ const filtroEstado = Astro.url.searchParams.get('estado') ?? 'activo';
 const filtros = ['activo', 'pausa', 'aspirante', 'archivado'];
 const search = (Astro.url.searchParams.get('q') ?? '').trim();
 
+// SELECT con calculo inline del % de perfil completo (mismos 18 campos
+// que se evaluan en /modelos/[id]). Asi la card de cada modelo muestra
+// su % sin necesidad de calcular en JS o hacer N queries extras.
+const SELECT_BASE = `SELECT id, nombre, ciudad, instagram, estado, cumpleanos,
+  (
+    (CASE WHEN email      IS NOT NULL AND email      != '' THEN 1 ELSE 0 END) +
+    (CASE WHEN whatsapp   IS NOT NULL AND whatsapp   != '' THEN 1 ELSE 0 END) +
+    (CASE WHEN instagram  IS NOT NULL AND instagram  != '' THEN 1 ELSE 0 END) +
+    (CASE WHEN cumpleanos IS NOT NULL AND cumpleanos != '' THEN 1 ELSE 0 END) +
+    (CASE WHEN genero     IS NOT NULL AND genero     != '' THEN 1 ELSE 0 END) +
+    (CASE WHEN ciudad     IS NOT NULL AND ciudad     != '' THEN 1 ELSE 0 END) +
+    (CASE WHEN cabello    IS NOT NULL AND cabello    != '' THEN 1 ELSE 0 END) +
+    (CASE WHEN ojos       IS NOT NULL AND ojos       != '' THEN 1 ELSE 0 END) +
+    (CASE WHEN talentos   IS NOT NULL AND talentos   != '' THEN 1 ELSE 0 END) +
+    (CASE WHEN drive_folder IS NOT NULL AND drive_folder != '' THEN 1 ELSE 0 END) +
+    (CASE WHEN estatura_cm IS NOT NULL THEN 1 ELSE 0 END) +
+    (CASE WHEN busto_cm    IS NOT NULL THEN 1 ELSE 0 END) +
+    (CASE WHEN cintura_cm  IS NOT NULL THEN 1 ELSE 0 END) +
+    (CASE WHEN cadera_cm   IS NOT NULL THEN 1 ELSE 0 END) +
+    (CASE WHEN calzado_mx  IS NOT NULL THEN 1 ELSE 0 END) +
+    (CASE WHEN polas        = 1 THEN 1 ELSE 0 END) +
+    (CASE WHEN book         = 1 THEN 1 ELSE 0 END) +
+    (CASE WHEN videocasting = 1 THEN 1 ELSE 0 END)
+  ) AS campos_completos
+ FROM modelos`;
+
 let results: any[] = [];
 if (search) {
   const like = `%${search}%`;
   const r = await db
-    .prepare(
-      `SELECT id, nombre, ciudad, instagram, estado, cumpleanos FROM modelos
-       WHERE (nombre LIKE ? OR instagram LIKE ? OR ciudad LIKE ?)
-       ORDER BY nombre ASC LIMIT 200`
-    )
+    .prepare(`${SELECT_BASE} WHERE (nombre LIKE ? OR instagram LIKE ? OR ciudad LIKE ?) ORDER BY nombre ASC LIMIT 200`)
     .bind(like, like, like)
     .all<any>();
   results = r.results ?? [];
 } else {
   const r = await db
-    .prepare(
-      'SELECT id, nombre, ciudad, instagram, estado, cumpleanos FROM modelos WHERE estado = ? ORDER BY nombre ASC LIMIT 200'
-    )
+    .prepare(`${SELECT_BASE} WHERE estado = ? ORDER BY nombre ASC LIMIT 200`)
     .bind(filtroEstado)
     .all<any>();
   results = r.results ?? [];

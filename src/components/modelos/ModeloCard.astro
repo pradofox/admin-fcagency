@@ -9,10 +9,20 @@ interface Props {
     instagram?: string | null;
     estado: string;
     cumpleanos?: string | null;
+    /** Cuántos de los 18 campos del perfil están llenos (lo calcula la query del listado). */
+    campos_completos?: number | null;
   };
 }
 const { modelo } = Astro.props;
 const edad = calcularEdad(modelo.cumpleanos);
+
+const TOTAL_CAMPOS = 18;
+const completos = modelo.campos_completos ?? null;
+const pctCompleto = completos != null ? Math.round((completos / TOTAL_CAMPOS) * 100) : null;
+const colorPct =
+  pctCompleto == null ? 'var(--text-3)' :
+  pctCompleto >= 80 ? 'var(--ok)' :
+  pctCompleto >= 50 ? '#E5E5E5' : 'var(--danger)';
 
 const chipClass: Record<string, string> = {
   activo: 'chip-ok',
@@ -23,8 +33,14 @@ const chipClass: Record<string, string> = {
 ---
 
 <a href={`/modelos/${modelo.id}`} style="display:block;color:inherit;text-decoration:none">
-  <article class="card">
-    <div class="card-title">
+  <article class="card" style="position:relative">
+    {pctCompleto != null && (
+      <div style={`position:absolute;top:10px;right:12px;font-family:var(--font-mono);font-size:11px;font-weight:600;color:${colorPct}`}
+           title={`Perfil ${pctCompleto}% completo · ${completos}/${TOTAL_CAMPOS} campos`}>
+        {pctCompleto}%
+      </div>
+    )}
+    <div class="card-title" style={pctCompleto != null ? 'padding-right:42px' : ''}>
       {modelo.nombre}
       {edad != null && (
         <span class="text-muted" style="font-weight:400;font-size:.75em;margin-left:8px">
@@ -37,5 +53,10 @@ const chipClass: Record<string, string> = {
       {modelo.ciudad && <span>{modelo.ciudad}</span>}
       {modelo.instagram && <span>@{modelo.instagram.replace(/^@/, '')}</span>}
     </div>
+    {pctCompleto != null && (
+      <div style="margin-top:8px;height:3px;background:var(--border);border-radius:2px;overflow:hidden">
+        <div style={`height:100%;width:${pctCompleto}%;background:${colorPct};opacity:.85`}></div>
+      </div>
+    )}
   </article>
 </a>
