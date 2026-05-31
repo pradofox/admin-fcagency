@@ -34,6 +34,10 @@ if (Astro.request.method === 'POST' && editable) {
       msgErr = `No puedes marcar el pago hasta que el cliente liquide "${linea.titulo}".`;
     } else {
       await db.prepare("UPDATE lineas_produccion SET estado = 'pagado' WHERE id = ?").bind(lineaId).run();
+      // Completar automaticamente la(s) tarea(s) ligadas a esta linea de pago
+      await db
+        .prepare("UPDATE acciones_calendario SET estado = 'completada', done = 1, updated_at = ? WHERE linea_produccion_id = ? AND estado != 'completada'")
+        .bind(now(), lineaId).run();
       await logAudit(db, { user, accion: 'state_change', entidad: 'pago', entidad_id: lineaId, entidad_label: linea.titulo, payload: { estado: 'pagado' } });
       return Astro.redirect('/pagos?tab=pagos');
     }
@@ -47,6 +51,10 @@ if (Astro.request.method === 'POST' && editable) {
       .bind(lineaId).first<any>();
     if (linea) {
       await db.prepare("UPDATE lineas_produccion SET estado = 'pendiente' WHERE id = ?").bind(lineaId).run();
+      // Regresar la tarea vinculada a pendiente
+      await db
+        .prepare("UPDATE acciones_calendario SET estado = 'pendiente', done = 0, updated_at = ? WHERE linea_produccion_id = ?")
+        .bind(now(), lineaId).run();
       await logAudit(db, { user, accion: 'state_change', entidad: 'pago', entidad_id: lineaId, entidad_label: linea.titulo, payload: { estado: 'pendiente', motivo: 'revertido' } });
     }
     return Astro.redirect('/pagos?tab=pagados');
@@ -84,9 +92,9 @@ if (Astro.request.method === 'POST' && editable) {
       const monto    = l.pago_proveedor ? ` ($${Math.round(l.pago_proveedor).toLocaleString('es-MX')})` : '';
       const tarea    = `Pagar a ${nombre}${monto} — ${prod?.titulo ?? 'producción'}`;
       await db
-        .prepare(`INSERT INTO acciones_calendario (id, fecha, tarea, produccion_id, prioridad, estado, asignado_por, created_at, updated_at)
-                  VALUES (?, ?, ?, ?, 'Alta', 'pendiente', ?, ?, ?)`)
-        .bind(newId(), fechaHoy, tarea, prodId, user.id, ts, ts)
+        .prepare(`INSERT INTO acciones_calendario (id, fecha, tarea, produccion_id, linea_produccion_id, prioridad, estado, asignado_por, created_at, updated_at)
+                  VALUES (?, ?, ?, ?, ?, 'Alta', 'pendiente', ?, ?, ?)`)
+        .bind(newId(), fechaHoy, tarea, prodId, l.id, user.id, ts, ts)
         .run();
     }
 

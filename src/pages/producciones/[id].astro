@@ -136,6 +136,20 @@ if (Astro.request.method === 'POST' && editable) {
     const nuevo = form.get('nuevo_estado') as string;
     if (lineaId && (nuevo === 'pendiente' || nuevo === 'pagado' || nuevo === 'cancelado')) {
       await db.prepare('UPDATE lineas_produccion SET estado = ? WHERE id = ? AND produccion_id = ?').bind(nuevo, lineaId, id).run();
+      // Sincronizar tarea(s) ligada(s) a esta linea
+      if (nuevo === 'pagado') {
+        await db
+          .prepare("UPDATE acciones_calendario SET estado = 'completada', done = 1, updated_at = ? WHERE linea_produccion_id = ? AND estado != 'completada'")
+          .bind(now(), lineaId).run();
+      } else if (nuevo === 'pendiente') {
+        await db
+          .prepare("UPDATE acciones_calendario SET estado = 'pendiente', done = 0, updated_at = ? WHERE linea_produccion_id = ?")
+          .bind(now(), lineaId).run();
+      } else if (nuevo === 'cancelado') {
+        await db
+          .prepare("UPDATE acciones_calendario SET estado = 'cancelada', done = 1, updated_at = ? WHERE linea_produccion_id = ?")
+          .bind(now(), lineaId).run();
+      }
     }
     return Astro.redirect(`/producciones/${id}`);
   }
