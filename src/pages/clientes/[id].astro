@@ -1,13 +1,14 @@
 ---
 import Layout from '../../components/Layout.astro';
-import { requireUser, canEdit } from '../../lib/session';
+import { requireSection, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 import { formatFecha } from '../../lib/fechas';
+import { logAudit } from '../../lib/audit';
 
 const PASOS_CASTING_DEFAULT = ['Brief recibido', 'Propuesta de modelos', 'Selección del cliente', 'Confirmación', 'Realizado'];
 
-const user     = requireUser(Astro);
+const user     = requireSection(Astro, 'clientes');
 const editable = canEdit(user);
 const db       = getDB(Astro);
 const { id }   = Astro.params;
@@ -32,6 +33,7 @@ if (Astro.request.method === 'POST' && editable) {
               get('rfc'), get('razon_social'), get('regimen_fiscal'), get('uso_cfdi'), get('direccion_fiscal'),
               now(), id)
         .run();
+      await logAudit(db, { user, accion: 'update', entidad: 'cliente', entidad_id: id, entidad_label: nombre });
       msgOk = 'Cliente actualizado.';
     }
   } else if (action === 'crear_casting') {
@@ -55,6 +57,7 @@ if (Astro.request.method === 'POST' && editable) {
         .bind(newId(), castingId, PASOS_CASTING_DEFAULT[i], i, ts)
         .run();
     }
+    await logAudit(db, { user, accion: 'create', entidad: 'casting', entidad_id: castingId, entidad_label: clienteRow?.nombre ?? null });
     return Astro.redirect(`/castings/${castingId}`);
   }
 }

@@ -5,6 +5,7 @@ import { requireSection, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 import { formatFecha } from '../../lib/fechas';
+import { logAudit } from '../../lib/audit';
 
 const user = requireSection(Astro, 'pagos');
 const editable = canEdit(user);
@@ -33,6 +34,7 @@ if (Astro.request.method === 'POST' && editable) {
       msgErr = `No puedes marcar el pago hasta que el cliente liquide "${linea.titulo}".`;
     } else {
       await db.prepare("UPDATE lineas_produccion SET estado = 'pagado' WHERE id = ?").bind(lineaId).run();
+      await logAudit(db, { user, accion: 'state_change', entidad: 'pago', entidad_id: lineaId, entidad_label: linea.titulo, payload: { estado: 'pagado' } });
       return Astro.redirect('/pagos?tab=pagos');
     }
   }
@@ -45,6 +47,7 @@ if (Astro.request.method === 'POST' && editable) {
     // Marcar producción como cobrada
     const prod = await db.prepare('SELECT titulo FROM producciones WHERE id = ?').bind(prodId).first<any>();
     await db.prepare("UPDATE producciones SET pago_cliente_estado = 'pagado', updated_at = ? WHERE id = ?").bind(ts, prodId).run();
+    await logAudit(db, { user, accion: 'state_change', entidad: 'produccion', entidad_id: prodId, entidad_label: prod?.titulo ?? null, payload: { pago_cliente_estado: 'pagado' } });
 
     // Auto-crear tareas: pagar a cada proveedor/modelo de esta producción
     const { results: lineasPend } = await db

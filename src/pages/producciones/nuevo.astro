@@ -4,8 +4,9 @@ import ProduccionForm from '../../components/producciones/ProduccionForm.astro';
 import { requireUser } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
+import { logAudit } from '../../lib/audit';
 
-requireUser(Astro);
+const user = requireUser(Astro);
 const db = getDB(Astro);
 
 let error: string | null = null;
@@ -55,6 +56,7 @@ if (Astro.request.method === 'POST') {
         ts
       )
       .run();
+    await logAudit(db, { user, accion: 'create', entidad: 'produccion', entidad_id: id, entidad_label: titulo });
     return Astro.redirect(`/producciones/${id}`);
   }
 }

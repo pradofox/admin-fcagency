@@ -2,11 +2,12 @@
 import Layout from '../../components/Layout.astro';
 import BriefForm from '../../components/briefs/BriefForm.astro';
 import NotasTimeline from '../../components/NotasTimeline.astro';
-import { requireUser, canEdit } from '../../lib/session';
+import { requireSection, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
+import { logAudit } from '../../lib/audit';
 
-const user = requireUser(Astro);
+const user = requireSection(Astro, 'briefs');
 const editable = canEdit(user);
 const db = getDB(Astro);
 const { id } = Astro.params;
@@ -45,7 +46,9 @@ if (Astro.request.method === 'POST' && editable) {
   }
 
   if (method === 'DELETE') {
+    const prev = await db.prepare('SELECT titulo FROM briefs WHERE id = ?').bind(id).first<{ titulo: string }>();
     await db.prepare('DELETE FROM briefs WHERE id = ?').bind(id).run();
+    await logAudit(db, { user, accion: 'delete', entidad: 'brief', entidad_id: id, entidad_label: prev?.titulo ?? null });
     return Astro.redirect('/briefs');
   }
 
@@ -75,6 +78,7 @@ if (Astro.request.method === 'POST' && editable) {
         get('estado') ?? 'idea', now(), id
       )
       .run();
+    await logAudit(db, { user, accion: 'update', entidad: 'brief', entidad_id: id, entidad_label: titulo });
     saved = true;
   }
 }

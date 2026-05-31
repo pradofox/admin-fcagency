@@ -1,11 +1,12 @@
 ---
 import Layout from '../../components/Layout.astro';
 import BriefForm from '../../components/briefs/BriefForm.astro';
-import { requireUser } from '../../lib/session';
+import { requireSection } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
+import { logAudit } from '../../lib/audit';
 
-const user = requireUser(Astro);
+const user = requireSection(Astro, 'briefs');
 const db = getDB(Astro);
 let error: string | null = null;
 
@@ -58,6 +59,7 @@ if (Astro.request.method === 'POST') {
         .run();
     }
 
+    await logAudit(db, { user, accion: 'create', entidad: 'brief', entidad_id: id, entidad_label: titulo });
     return Astro.redirect(`/briefs/${id}`);
   }
 }

@@ -3,6 +3,7 @@ import Layout from '../../components/Layout.astro';
 import { requireSection, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
+import { logAudit } from '../../lib/audit';
 
 const user = requireSection(Astro, 'cotizaciones');
 const editable = canEdit(user);
@@ -44,6 +45,7 @@ if (Astro.request.method === 'POST') {
       )
       .bind(id, numero, get('cliente_id'), get('cliente_libre'), titulo, get('fecha_vencimiento'), get('notas'), get('notas_internas'), user.id, ts, ts)
       .run();
+    await logAudit(db, { user, accion: 'create', entidad: 'cotizacion', entidad_id: id, entidad_label: `${numero} ${titulo}` });
     return Astro.redirect(`/cotizaciones/${id}`);
   }
 }

@@ -4,6 +4,7 @@ import EmptyState from '../../components/EmptyState.astro';
 import { requireSection, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
+import { logAudit } from '../../lib/audit';
 
 const user = requireSection(Astro, 'clientes');
 const db = getDB(Astro);
@@ -16,7 +17,9 @@ if (Astro.request.method === 'POST' && editable) {
   const action = form.get('_action') as string;
   if (action === 'delete') {
     const id = form.get('id') as string;
+    const prev = await db.prepare('SELECT nombre FROM clientes WHERE id = ?').bind(id).first<{ nombre: string }>();
     await db.prepare('DELETE FROM clientes WHERE id = ?').bind(id).run();
+    await logAudit(db, { user, accion: 'delete', entidad: 'cliente', entidad_id: id, entidad_label: prev?.nombre ?? null });
     return Astro.redirect('/clientes');
   }
   if (action === 'toggle_frecuente') {
@@ -42,6 +45,7 @@ if (Astro.request.method === 'POST' && editable) {
       )
       .bind(id, nombre, get('email'), get('whatsapp'), get('empresa'), get('notas'), get('marca_id'), ts, ts)
       .run();
+    await logAudit(db, { user, accion: 'create', entidad: 'cliente', entidad_id: id, entidad_label: nombre });
     return Astro.redirect('/clientes');
   }
 }

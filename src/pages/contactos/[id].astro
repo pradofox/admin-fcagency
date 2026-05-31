@@ -1,11 +1,12 @@
 ---
 import Layout from '../../components/Layout.astro';
 import NotasTimeline from '../../components/NotasTimeline.astro';
-import { requireUser, canEdit } from '../../lib/session';
+import { requireSection, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
+import { logAudit } from '../../lib/audit';
 
-const user = requireUser(Astro);
+const user = requireSection(Astro, 'contactos');
 const editable = canEdit(user);
 const db = getDB(Astro);
 const { id } = Astro.params;
@@ -43,7 +44,9 @@ if (Astro.request.method === 'POST' && editable) {
   }
 
   if (method === 'DELETE') {
+    const prev = await db.prepare('SELECT nombre FROM contactos WHERE id = ?').bind(id).first<{ nombre: string }>();
     await db.prepare('DELETE FROM contactos WHERE id = ?').bind(id).run();
+    await logAudit(db, { user, accion: 'delete', entidad: 'contacto', entidad_id: id, entidad_label: prev?.nombre ?? null });
     return Astro.redirect('/contactos');
   }
 
@@ -85,6 +88,7 @@ if (Astro.request.method === 'POST' && editable) {
       now(), id
     )
     .run();
+  await logAudit(db, { user, accion: 'update', entidad: 'contacto', entidad_id: id, entidad_label: get('nombre') });
   saved = true;
 }
 

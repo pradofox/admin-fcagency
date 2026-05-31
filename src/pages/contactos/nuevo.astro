@@ -1,11 +1,12 @@
 ---
 import Layout from '../../components/Layout.astro';
-import { requireUser } from '../../lib/session';
+import { requireSection } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 import { pasosParaTipo } from '../../lib/crm-pasos';
+import { logAudit } from '../../lib/audit';
 
-requireUser(Astro);
+const user = requireSection(Astro, 'contactos');
 const db = getDB(Astro);
 let error: string | null = null;
 
@@ -46,6 +47,7 @@ if (Astro.request.method === 'POST') {
         .run();
     }
 
+    await logAudit(db, { user, accion: 'create', entidad: 'contacto', entidad_id: id, entidad_label: nombre, payload: { tipo } });
     return Astro.redirect(`/contactos/${id}`);
   }
 }

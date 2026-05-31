@@ -7,8 +7,11 @@ import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 import { formatFecha } from '../../lib/fechas';
 import { enviarAvisosProduccion, recolectarDestinatarios, type GrupoAviso } from '../../lib/avisos';
+import { logAudit } from '../../lib/audit';
 
 const user = requireUser(Astro);
+// produccion es visible para todos los roles, pero igual usamos el helper
+// para consistencia y para que el bloqueo se respete si cambia el mapa.
 const editable = canEdit(user);
 const db = getDB(Astro);
 const { id } = Astro.params;
@@ -63,7 +66,9 @@ if (Astro.request.method === 'POST' && editable) {
   }
 
   if (method === 'DELETE') {
+    const prev = await db.prepare('SELECT titulo FROM producciones WHERE id = ?').bind(id).first<{ titulo: string }>();
     await db.prepare('DELETE FROM producciones WHERE id = ?').bind(id).run();
+    await logAudit(db, { user, accion: 'delete', entidad: 'produccion', entidad_id: id, entidad_label: prev?.titulo ?? null });
     return Astro.redirect('/producciones');
   }
 
@@ -139,7 +144,9 @@ if (Astro.request.method === 'POST' && editable) {
     const value = form.get('value') as string;
     const allowed = ['pago_cliente_estado', 'pago_modelo_estado', 'material_recibido', 'retro_enviada', 'estado'];
     if (allowed.includes(field)) {
+      const prev = await db.prepare('SELECT titulo FROM producciones WHERE id = ?').bind(id).first<{ titulo: string }>();
       await db.prepare(`UPDATE producciones SET ${field} = ?, updated_at = ? WHERE id = ?`).bind(value, now(), id).run();
+      await logAudit(db, { user, accion: 'state_change', entidad: 'produccion', entidad_id: id, entidad_label: prev?.titulo ?? null, payload: { campo: field, valor: value } });
     }
     return Astro.redirect(`/producciones/${id}`);
   }
@@ -197,6 +204,7 @@ if (Astro.request.method === 'POST' && editable) {
         id
       )
       .run();
+    await logAudit(db, { user, accion: 'update', entidad: 'produccion', entidad_id: id, entidad_label: titulo });
     saved = true;
   }
 }
