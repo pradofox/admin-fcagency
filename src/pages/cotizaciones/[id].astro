@@ -54,27 +54,28 @@ if (Astro.request.method === 'POST' && editable) {
     if (!concepto) {
       error = 'Concepto no encontrado.';
     } else {
-      const precioBase = concepto.precio_mxn ?? 0;
-      const horaAd = concepto.precio_hora_adicional ?? null;
-      const porHora = horaAd != null && horaAd > 0;
-      // Las horas cuentan SOLO cuando el concepto es de modelo (regla de
-      // negocio de FC: solo modelos se cobran por horas en el cotizador).
-      // Esto coincide con el frontend que solo muestra el input Horas para
-      // conceptos cuyo rol o nombre contiene "modelo".
+      // Regla de negocio FC: TODO concepto de modelo (cualquier tipo) sigue
+      // la tarifa tier: 1ª hora por modelo = $1,000, cada hora extra por
+      // modelo = $800. Hardcoded — no depende de lo configurado en BD.
+      // Para los demas conceptos, se usa precio × cantidad (sin horas).
       const esModelo = /modelo/i.test(String(concepto.rol ?? '')) || /modelo/i.test(String(concepto.nombre ?? ''));
-      const esPorHora = esModelo;
+      const TARIFA_MODELO_1HR = 1000;
+      const TARIFA_MODELO_EXTRA = 800;
+      const precioBase = esModelo ? TARIFA_MODELO_1HR : (concepto.precio_mxn ?? 0);
+      const horaAd    = esModelo ? TARIFA_MODELO_EXTRA : (concepto.precio_hora_adicional ?? null);
+      const porHora   = esModelo || (horaAd != null && horaAd > 0);
 
       const cantRaw  = form.get('cantidad');
       const cantidad = cantRaw === null || cantRaw === '' ? 1 : Math.max(1, Number(cantRaw) || 1);
       const horasRaw = form.get('horas');
-      const horas    = !esPorHora ? 1 : (horasRaw === null || horasRaw === '' ? 1 : Math.max(1, Number(horasRaw) || 1));
+      const horas    = !esModelo ? 1 : (horasRaw === null || horasRaw === '' ? 1 : Math.max(1, Number(horasRaw) || 1));
 
-      // Subtotal de la línea (lo que ve el cliente).
-      // Tiered (modelo con hora adicional): (1ª hora + extras) × cantidad.
-      // Normal: precio × cantidad × horas.
+      // Subtotal de la linea:
+      // Modelos:  cantidad × (1,000 + (horas-1) × 800)
+      // Otros:    precio × cantidad
       const subtotal = porHora
         ? cantidad * (horas > 1 ? precioBase + (horas - 1) * horaAd! : precioBase)
-        : precioBase * cantidad * horas;
+        : precioBase * cantidad;
 
       // Reparto a proveedores: escala con el subtotal respecto al precio base.
       const { results: reps } = await db
@@ -693,7 +694,7 @@ const ESTADOS_FLUJO = [
             <details style="background:var(--bg-2);border:1px solid var(--border);padding:16px;margin-bottom:10px" open>
               <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Agregar modelos a la cotización</summary>
               <p class="text-muted" style="font-size:11px;margin:8px 0 12px">
-                1ª hora por modelo = $1,000 · cada hora extra por modelo = $800. Captura cuántos modelos y cuántas horas.
+                Tarifa fija para todos los conceptos de modelo: <strong>1ª hora = $1,000</strong> · <strong>cada hora extra = $800</strong> (por modelo).
               </p>
               <form method="POST" action={`/cotizaciones/${id}`} style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
                 <input type="hidden" name="_action" value="add_concepto" />
@@ -718,6 +719,14 @@ const ESTADOS_FLUJO = [
                 </div>
                 <button type="submit" class="btn btn-primary">Agregar a la cotización</button>
               </form>
+              <div style="margin-top:14px;padding:10px 12px;background:var(--bg-3,#1a1a1a);border:1px solid var(--border);border-radius:4px;font-size:11px;line-height:1.7">
+                <strong>Ejemplos:</strong>
+                <ul style="margin:6px 0 0 18px;color:var(--text-2)">
+                  <li>2 modelos × 1 hora &nbsp;= <code>2 × $1,000 = $2,000</code></li>
+                  <li>2 modelos × 3 horas = <code>2 × ($1,000 + 2×$800) = 2 × $2,600 = $5,200</code></li>
+                  <li>3 modelos × 4 horas = <code>3 × ($1,000 + 3×$800) = 3 × $3,400 = $10,200</code></li>
+                </ul>
+              </div>
             </details>
           )}
 
