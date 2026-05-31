@@ -11,6 +11,8 @@ interface Destinatario {
   email: string;
   rol: string | null;
   hora_llamado: string | null;
+  ics_token?: string | null;   // solo modelos: para suscribir calendario
+  modelo_id?: string | null;   // solo modelos: para generar token si falta
 }
 
 /** Junta los destinatarios de una producción que tienen email. */
@@ -24,7 +26,7 @@ export async function recolectarDestinatarios(
   if (grupos.includes('modelos')) {
     const { results } = await db
       .prepare(
-        `SELECT m.nombre, m.email, lp.rol, lp.hora_llamado
+        `SELECT m.id as modelo_id, m.nombre, m.email, m.ics_token, lp.rol, lp.hora_llamado
          FROM lineas_produccion lp
          JOIN modelos m ON m.id = lp.modelo_id
          WHERE lp.produccion_id = ? AND lp.estado != 'cancelado'
@@ -33,7 +35,10 @@ export async function recolectarDestinatarios(
       .bind(prod.id)
       .all<any>();
     for (const r of results ?? [])
-      out.push({ tipo: 'modelo', nombre: r.nombre, email: r.email.trim(), rol: r.rol, hora_llamado: r.hora_llamado });
+      out.push({
+        tipo: 'modelo', nombre: r.nombre, email: r.email.trim(), rol: r.rol, hora_llamado: r.hora_llamado,
+        ics_token: r.ics_token, modelo_id: r.modelo_id,
+      });
   }
 
   if (grupos.includes('proveedores')) {
@@ -84,7 +89,7 @@ export async function enviarAvisosProduccion(
   db: D1Database,
   prod: any,
   resendKey: string | undefined,
-  opts: { tipo: 'convocatoria' | 'recordatorio'; grupos: GrupoAviso[]; evitarDuplicados?: boolean; clienteNombre?: string | null }
+  opts: { tipo: 'convocatoria' | 'recordatorio'; grupos: GrupoAviso[]; evitarDuplicados?: boolean; clienteNombre?: string | null; appUrl?: string }
 ): Promise<ResultadoEnvio> {
   const destinatarios = await recolectarDestinatarios(db, prod, opts.grupos);
   const horario = prod.hora_inicio
@@ -109,6 +114,40 @@ export async function enviarAvisosProduccion(
       }
     }
 
+    // Links de calendario para que el modelo se agregue solo el evento
+    // (y opcionalmente suscriba el feed personal con todas sus producciones).
+    let icsFeedUrl: string | null = null;
+    let gcalEventUrl: string | null = null;
+    if (d.tipo === 'modelo' && opts.appUrl) {
+      let token = d.ics_token ?? null;
+      if (!token && d.modelo_id) {
+        // Generar token al vuelo si el modelo nunca tuvo uno
+        token = crypto.randomUUID().replace(/-/g, '');
+        await db.prepare('UPDATE modelos SET ics_token = ? WHERE id = ?').bind(token, d.modelo_id).run();
+      }
+      if (token) icsFeedUrl = `${opts.appUrl}/api/ics/modelo/${token}.ics`;
+
+      // Google Calendar "agregar evento" URL (prelena un evento de medio dia
+      // sin tiempo si no hay hora, o con hora si esta capturada).
+      if (prod.fecha_inicio) {
+        const ymd = (prod.fecha_inicio as string).slice(0, 10).replace(/-/g, '');
+        let dates = `${ymd}/${ymd}`;
+        if (prod.hora_inicio) {
+          const hi = String(prod.hora_inicio).replace(':', '') + '00';
+          const hf = prod.hora_fin ? String(prod.hora_fin).replace(':', '') + '00' : hi;
+          dates = `${ymd}T${hi}/${ymd}T${hf}`;
+        }
+        const params = new URLSearchParams({
+          action: 'TEMPLATE',
+          text: `${prod.titulo}${d.rol ? ' — ' + d.rol : ''}`,
+          dates,
+          details: `Producción FC Agency${opts.clienteNombre ? ' · ' + opts.clienteNombre : ''}${d.hora_llamado ? '\\nTu llamado: ' + d.hora_llamado : ''}${prod.notas ? '\\n\\n' + prod.notas : ''}`,
+          location: [prod.ubicacion_shoot, prod.ubicacion_mua, prod.ubicacion].filter(Boolean).join(' · '),
+        });
+        gcalEventUrl = `https://calendar.google.com/calendar/render?${params.toString()}`;
+      }
+    }
+
     const html = buildConvocatoriaHtml({
       esRecordatorio: opts.tipo === 'recordatorio',
       saludoNombre: d.tipo === 'cliente' ? d.nombre : (d.nombre?.split(' ')[0] ?? null),
@@ -122,6 +161,8 @@ export async function enviarAvisosProduccion(
       ubicacionMua: prod.ubicacion_mua ?? null,
       ubicacionShoot: prod.ubicacion_shoot ?? null,
       notas: prod.notas ?? null,
+      icsFeedUrl,
+      gcalEventUrl,
     });
 
     const subject = `${opts.tipo === 'recordatorio' ? 'Recordatorio' : 'Convocatoria'}: ${prod.titulo}${fecha ? ' · ' + fecha : ''}`;

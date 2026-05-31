@@ -91,6 +91,10 @@ export interface ConvocatoriaData {
   ubicacionMua?: string | null;
   ubicacionShoot?: string | null;
   notas?: string | null;
+  /** URL del feed .ics personal del modelo (suscribir todas sus producciones). */
+  icsFeedUrl?: string | null;
+  /** URL "Agregar a Google Calendar" para este evento especifico. */
+  gcalEventUrl?: string | null;
 }
 
 /** Arma el HTML de una convocatoria / recordatorio de producción. */
@@ -120,6 +124,13 @@ export function buildConvocatoriaHtml(d: ConvocatoriaData): string {
         ${row('Ubicación shoot', d.ubicacionShoot)}
         ${row('Notas', d.notas)}
       </table>
+      ${(d.gcalEventUrl || d.icsFeedUrl) ? `
+      <div style="margin-top:28px;padding-top:20px;border-top:1px solid #262626">
+        <div style="font-size:11px;color:#808080;letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px">Agregar a tu calendario</div>
+        ${d.gcalEventUrl ? `<a href="${d.gcalEventUrl}" style="display:inline-block;background:#FFFFFF;color:#000;padding:9px 18px;font-size:12px;text-decoration:none;font-weight:600;border-radius:4px;margin-right:8px">+ Google Calendar</a>` : ''}
+        ${d.icsFeedUrl ? `<a href="${d.icsFeedUrl}" style="display:inline-block;background:transparent;color:#E5E5E5;border:1px solid #383838;padding:8px 16px;font-size:12px;text-decoration:none;font-weight:500;border-radius:4px">Suscribir todas mis producciones (.ics)</a>` : ''}
+        ${d.icsFeedUrl ? `<p style="font-size:11px;color:#808080;line-height:1.6;margin:12px 0 0">El segundo link es tu calendario personal de FC Agency: cualquier producción nueva o cambio aparece solo en tu Google/Apple Calendar.</p>` : ''}
+      </div>` : ''}
       <p style="font-size:11.5px;color:#808080;line-height:1.6;margin:24px 0 0">Cualquier duda, responde a este correo. — FC Agency</p>
     </div>
   </body>

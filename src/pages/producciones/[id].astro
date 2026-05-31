@@ -114,8 +114,9 @@ if (Astro.request.method === 'POST' && editable) {
         : null;
       const runtime = (Astro.locals as any).runtime;
       const resendKey = runtime?.env?.RESEND_API_KEY;
+      const appUrl    = runtime?.env?.APP_URL ?? Astro.url.origin;
       const r = await enviarAvisosProduccion(db, prodRow, resendKey, {
-        tipo, grupos, clienteNombre: cli?.nombre ?? null,
+        tipo, grupos, clienteNombre: cli?.nombre ?? null, appUrl,
       });
       avisoMsg = r.enviados === 0 && r.errores === 0
         ? 'No había destinatarios con correo en los grupos elegidos.'
