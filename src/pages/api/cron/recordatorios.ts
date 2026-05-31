@@ -92,11 +92,11 @@ export const GET: APIRoute = async (context) => {
     const filas = cumplesProximos.map((x: any) => {
       const cuandoTxt = x.dias === 0 ? 'HOY' : x.dias === 1 ? 'mañana' : `en ${x.dias} días`;
       const edadTxt = x.edad != null ? ` cumple ${x.edad + (x.dias === 0 ? 0 : 1)}` : '';
-      return `<tr><td style="padding:6px 0;color:#F5F5F5;font-size:13px">${x.nombre}</td><td style="padding:6px 0;color:#C9A84C;font-size:13px">${cuandoTxt}${edadTxt}</td><td style="padding:6px 0;color:#808080;font-size:12px">${x.cuando ?? ''}</td></tr>`;
+      return `<tr><td style="padding:6px 0;color:#F5F5F5;font-size:13px">${x.nombre}</td><td style="padding:6px 0;color:#E5E5E5;font-size:13px">${cuandoTxt}${edadTxt}</td><td style="padding:6px 0;color:#808080;font-size:12px">${x.cuando ?? ''}</td></tr>`;
     }).join('');
     const html = `<!DOCTYPE html><html><body style="background:#080808;color:#F5F5F5;font-family:'Inter',system-ui,sans-serif;padding:40px 20px;margin:0">
       <div style="max-width:520px;margin:0 auto;background:#0E0E0E;border:1px solid #262626;border-radius:6px;padding:36px 32px">
-        <div style="font-size:13px;font-weight:600;color:#C9A84C;letter-spacing:.08em;text-transform:uppercase;margin-bottom:20px">FC Agency · Cumpleaños de modelos</div>
+        <div style="font-size:13px;font-weight:600;color:#E5E5E5;letter-spacing:.08em;text-transform:uppercase;margin-bottom:20px">FC Agency · Cumpleaños de modelos</div>
         <p style="font-size:14px;line-height:1.6;margin:0 0 18px;color:#B3B3B3">Próximos cumpleaños:</p>
         <table style="width:100%;border-collapse:collapse">${filas}</table>
       </div></body></html>`;

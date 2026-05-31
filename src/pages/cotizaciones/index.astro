@@ -60,7 +60,7 @@ const colorEstado: Record<string, string> = {
   {cotizaciones && cotizaciones.length > 0 ? (
     <div>
       {cotizaciones.map((c: any) => (
-        <a href={`/cotizaciones/${c.id}`} class="card" style={`display:block;color:inherit;text-decoration:none;margin-bottom:8px;${c.estado === 'autorizada' ? 'border-left:3px solid var(--text-ok,#4ade80)' : c.estado === 'rechazada' ? 'border-left:3px solid var(--danger,#e25555)' : c.estado === 'enviada' ? 'border-left:3px solid #e9b949' : ''}`}>
+        <a href={`/cotizaciones/${c.id}`} class="card" style={`display:block;color:inherit;text-decoration:none;margin-bottom:8px;${c.estado === 'autorizada' ? 'border-left:3px solid var(--text-ok,#4ade80)' : c.estado === 'rechazada' ? 'border-left:3px solid var(--danger,#e25555)' : c.estado === 'enviada' ? 'border-left:3px solid #E5E5E5' : ''}`}>
           <div style="display:flex;justify-content:space-between;align-items:center;gap:16px">
             <div style="flex:1;min-width:0">
               <div style="display:flex;gap:10px;align-items:baseline">

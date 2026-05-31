@@ -159,7 +159,7 @@ const USOS_CFDI = [
     </div>
     <div class="col card">
       <div class="card-meta">Vencen en 7 días</div>
-      <div class="card-title mono" style={proximos7.length > 0 ? 'color:#e9b949' : ''}>{proximos7.length}</div>
+      <div class="card-title mono" style={proximos7.length > 0 ? 'color:#E5E5E5' : ''}>{proximos7.length}</div>
     </div>
     <div class="col card">
       <div class="card-meta">Vencen en 30 días</div>
@@ -170,9 +170,9 @@ const USOS_CFDI = [
       <div class="card-title mono" style="color:var(--gold)">${Math.round(totalMes).toLocaleString('es-MX')}</div>
     </div>
     {facturasPendientes.length > 0 && (
-      <div class="col card" style="border-left:3px solid #e9b949">
+      <div class="col card" style="border-left:3px solid #E5E5E5">
         <div class="card-meta">Facturas por emitir</div>
-        <div class="card-title mono" style="color:#e9b949">{facturasPendientes.length}</div>
+        <div class="card-title mono" style="color:#E5E5E5">{facturasPendientes.length}</div>
       </div>
     )}
   </div>
@@ -245,7 +245,7 @@ const USOS_CFDI = [
   {/* ── Facturas por emitir ── */}
   {facturasPendientes.length > 0 && (
     <div style="margin-bottom:32px">
-      <h2 style="color:#e9b949;margin-bottom:12px">Facturas por emitir ({facturasPendientes.length})</h2>
+      <h2 style="color:#E5E5E5;margin-bottom:12px">Facturas por emitir ({facturasPendientes.length})</h2>
       <div class="table-card">
         <table>
           <thead>
@@ -314,7 +314,7 @@ const USOS_CFDI = [
   {/* ── Próximos 7 días ── */}
   {proximos7.length > 0 && (
     <div style="margin-bottom:32px">
-      <h2 style="color:#e9b949;margin-bottom:12px">Vencen en 7 días ({proximos7.length})</h2>
+      <h2 style="color:#E5E5E5;margin-bottom:12px">Vencen en 7 días ({proximos7.length})</h2>
       <div class="table-card">
         <table>
           <thead><tr><th>Miembro</th><th>No.</th><th>Plan</th><th>Vence</th><th class="right">Monto</th></tr></thead>
@@ -324,7 +324,7 @@ const USOS_CFDI = [
                 <td><a href={`/district/miembros/${m.id}`} style="color:inherit">{m.nombre}</a></td>
                 <td class="mono" style="color:var(--gold)">{m.numero_membresia ?? '—'}</td>
                 <td><small class="text-muted">{m.plan_nombre}</small></td>
-                <td class="mono" style="color:#e9b949">{formatFecha(m.fecha_proximo_pago)}</td>
+                <td class="mono" style="color:#E5E5E5">{formatFecha(m.fecha_proximo_pago)}</td>
                 <td class="right mono">${Math.round(m.precio_pactado_mxn ?? 0).toLocaleString('es-MX')}</td>
               </tr>
             ))}
@@ -380,7 +380,7 @@ const USOS_CFDI = [
                 {p.requiere_factura === 1
                   ? (p.factura_emitida === 1
                       ? <span class="chip chip-ok" style="font-size:10px">✓ emitida</span>
-                      : <span class="chip" style="color:#e9b949;font-size:10px">pendiente</span>)
+                      : <span class="chip" style="color:#E5E5E5;font-size:10px">pendiente</span>)
                   : <span class="text-muted" style="font-size:11px">—</span>
                 }
               </td>

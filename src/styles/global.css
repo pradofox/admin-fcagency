@@ -30,10 +30,15 @@
   --text-3: #808080;
   --text-4: #4D4D4D;
 
-  /* Acento: blanco puro (no color) */
+  /* Acento: blanco puro / gris brillante (sin color) */
   --accent: #FFFFFF;
   --accent-bg: rgba(255, 255, 255, 0.06);
   --accent-border: rgba(255, 255, 255, 0.18);
+
+  /* "gold" legacy: ahora gris brillante. Muchos componentes lo usan inline
+   * como color de acento decorativo; mantener la variable los unifica al
+   * mismo gris brillante en lugar de cambiar cada inline a mano. */
+  --gold: #E5E5E5;
 
   /* Semánticos (mínimos, solo para estados realmente críticos) */
   --danger: #F87171;
@@ -42,9 +47,9 @@
   --ok: #4ADE80;
   --ok-bg: rgba(74, 222, 128, 0.08);
   --ok-border: rgba(74, 222, 128, 0.22);
-  --warning: #FBBF24;
-  --warning-bg: rgba(251, 191, 36, 0.08);
-  --warning-border: rgba(251, 191, 36, 0.22);
+  --warning: #E5E5E5;
+  --warning-bg: rgba(255, 255, 255, 0.06);
+  --warning-border: rgba(255, 255, 255, 0.22);
   --info: #60A5FA;
   --info-bg: rgba(96, 165, 250, 0.08);
   --info-border: rgba(96, 165, 250, 0.22);

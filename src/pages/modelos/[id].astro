@@ -162,7 +162,7 @@ const totalCampos = camposTexto.length + camposNum.length + camposCheck.length;
 const pctCompleto = totalCampos > 0 ? Math.round((completos / totalCampos) * 100) : 0;
 const colorPct =
   pctCompleto >= 80 ? 'var(--text-ok,#4ade80)' :
-  pctCompleto >= 50 ? '#e9b949' : 'var(--danger,#e25555)';
+  pctCompleto >= 50 ? '#E5E5E5' : 'var(--danger,#e25555)';
 
 // Total de trabajos: trabajos_modelo (registro oficial) + lineas_produccion
 // historicas (apariciones en producciones del repo nuevo).
@@ -181,7 +181,7 @@ if (!icsToken) {
 const icsUrl = `${Astro.url.origin}/api/ics/modelo/${icsToken}.ics`;
 
 const colorEstado: Record<string, string> = {
-  planeacion: '#e9b949', confirmada: 'var(--text-ok,#4ade80)', en_curso: '#6ab7ff',
+  planeacion: '#E5E5E5', confirmada: 'var(--text-ok,#4ade80)', en_curso: '#6ab7ff',
   completada: 'var(--text-muted,#888)', cancelada: 'var(--danger,#e25555)'
 };
 ---

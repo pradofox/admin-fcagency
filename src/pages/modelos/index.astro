@@ -130,10 +130,10 @@ const pctBajas  = totalP ? (bajas  / totalP) * 100 : 0;
         <span class="text-muted" style="font-size:12px">{activasN} de {totalGen} en el roster</span>
       </div>
     </div>
-    <div style={`background:var(--bg-2);border:1px solid var(--border);border-left:3px solid ${pctMatFaltantes >= 50 ? 'var(--danger,#e25555)' : pctMatFaltantes >= 25 ? '#e9b949' : 'var(--text-ok,#4ade80)'};padding:12px 14px;border-radius:4px`}>
+    <div style={`background:var(--bg-2);border:1px solid var(--border);border-left:3px solid ${pctMatFaltantes >= 50 ? 'var(--danger,#e25555)' : pctMatFaltantes >= 25 ? '#E5E5E5' : 'var(--text-ok,#4ade80)'};padding:12px 14px;border-radius:4px`}>
       <div style="font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--text-2)">Material faltante</div>
       <div style="display:flex;align-items:baseline;gap:8px;margin-top:4px">
-        <span class="mono" style={`font-size:22px;color:${pctMatFaltantes >= 50 ? 'var(--danger,#e25555)' : pctMatFaltantes >= 25 ? '#e9b949' : 'var(--text-ok,#4ade80)'}`}>{pctMatFaltantes}%</span>
+        <span class="mono" style={`font-size:22px;color:${pctMatFaltantes >= 50 ? 'var(--danger,#e25555)' : pctMatFaltantes >= 25 ? '#E5E5E5' : 'var(--text-ok,#4ade80)'}`}>{pctMatFaltantes}%</span>
         <span class="text-muted" style="font-size:12px">{matFaltantes} de {matTotal} activas</span>
       </div>
       <div class="text-muted" style="font-size:10px;margin-top:2px">{matCompletas} ya tienen polas + book + videocasting</div>
@@ -147,13 +147,13 @@ const pctBajas  = totalP ? (bajas  / totalP) * 100 : 0;
           Perfiles completos (de {totalP} activas)
         </div>
         <div class="mono" style="font-size:13px">
-          <span style={`color:${pctPromedio >= 80 ? 'var(--text-ok,#4ade80)' : pctPromedio >= 50 ? '#e9b949' : 'var(--danger,#e25555)'}`}>{pctPromedio}%</span>
+          <span style={`color:${pctPromedio >= 80 ? 'var(--text-ok,#4ade80)' : pctPromedio >= 50 ? '#E5E5E5' : 'var(--danger,#e25555)'}`}>{pctPromedio}%</span>
           <span class="text-muted" style="font-size:11px">&nbsp;promedio</span>
         </div>
       </div>
       <div style="height:10px;border-radius:3px;overflow:hidden;display:flex;background:var(--bg-3,#1a1a1a)">
         {altas  > 0 && <div title={`${altas} con perfil ≥80%`} style={`flex:0 0 ${pctAltas}%;background:var(--text-ok,#4ade80);opacity:.85`}></div>}
-        {medias > 0 && <div title={`${medias} con perfil 50–79%`} style={`flex:0 0 ${pctMedias}%;background:#e9b949;opacity:.85`}></div>}
+        {medias > 0 && <div title={`${medias} con perfil 50–79%`} style={`flex:0 0 ${pctMedias}%;background:#E5E5E5;opacity:.85`}></div>}
         {bajas  > 0 && <div title={`${bajas} con perfil <50%`} style={`flex:0 0 ${pctBajas}%;background:var(--danger,#e25555);opacity:.85`}></div>}
       </div>
       <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:11px">
@@ -163,7 +163,7 @@ const pctBajas  = totalP ? (bajas  / totalP) * 100 : 0;
           <span class="mono">{altas}</span>
         </span>
         <span style="display:flex;align-items:center;gap:5px">
-          <span style="width:10px;height:10px;border-radius:2px;background:#e9b949;opacity:.85;display:inline-block"></span>
+          <span style="width:10px;height:10px;border-radius:2px;background:#E5E5E5;opacity:.85;display:inline-block"></span>
           <span class="text-muted">50–79%</span>
           <span class="mono">{medias}</span>
         </span>

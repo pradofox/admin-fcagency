@@ -68,7 +68,7 @@ const edadInicial = calcularEdad(modelo.cumpleanos);
         <span id="edad-badge" class="text-muted" style={`font-weight:400;margin-left:8px${edadInicial == null ? ';display:none' : ''}`}>
           {edadInicial != null ? `· ${edadInicial} años` : ''}
         </span>
-        <span id="edad-warning" class="text-muted" style={`font-weight:400;margin-left:8px;color:#e9b949;${edadInicial == null && modelo.cumpleanos ? '' : 'display:none'}`}>
+        <span id="edad-warning" class="text-muted" style={`font-weight:400;margin-left:8px;color:#E5E5E5;${edadInicial == null && modelo.cumpleanos ? '' : 'display:none'}`}>
           ⚠ falta el año
         </span>
       </label>

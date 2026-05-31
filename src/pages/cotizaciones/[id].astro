@@ -381,7 +381,7 @@ const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
 const editLineaId = Astro.url.searchParams.get('editar_linea');
 
 const colorEstado: Record<string, string> = {
-  borrador: '', enviada: '#e9b949', autorizada: 'var(--text-ok,#4ade80)',
+  borrador: '', enviada: '#E5E5E5', autorizada: 'var(--text-ok,#4ade80)',
   rechazada: 'var(--danger,#e25555)', convertida: 'var(--text-ok,#4ade80)'
 };
 
@@ -465,7 +465,7 @@ const ESTADOS_FLUJO = [
             <input type="hidden" name="_action" value="convertir" />
             <p class="text-muted" style="font-size:12px;margin:0 0 12px">
               Se creará una producción con todas las líneas, proveedores y modelos propuestos.
-              {(cot.tipo === 'editorial' || cot.tipo === 'pasarela') && <strong style="color:#e9b949"> Fecha obligatoria para {cot.tipo}.</strong>}
+              {(cot.tipo === 'editorial' || cot.tipo === 'pasarela') && <strong style="color:#E5E5E5"> Fecha obligatoria para {cot.tipo}.</strong>}
             </p>
             <label class="label">Fecha del evento {(cot.tipo === 'editorial' || cot.tipo === 'pasarela') ? '*' : ''}</label>
             <input class="input" type="date" name="fecha_inicio" value={cot.fecha_evento ?? ''} required={cot.tipo === 'editorial' || cot.tipo === 'pasarela'} />

@@ -170,7 +170,7 @@ const editRepartoId = Astro.url.searchParams.get('editar');
       <div style="height:18px;border-radius:3px;overflow:hidden;display:flex;gap:1px">
         {(repartos as any[]).map((r, i) => {
           const w = concepto.precio_mxn > 0 ? Math.max(1, r.monto_mxn / concepto.precio_mxn * 100) : 0;
-          const colores = ['#e25555','#e9b949','#4ade80','#60a5fa','#c084fc','#fb923c','#34d399','#f87171'];
+          const colores = ['#e25555','#E5E5E5','#4ade80','#60a5fa','#c084fc','#fb923c','#34d399','#f87171'];
           return <div style={`flex:0 0 ${w}%;background:${colores[i % colores.length]};opacity:.8`} title={`${r.proveedor_nombre}: ${fmt(r.monto_mxn)}`}></div>;
         })}
         {margen > 0 && (
@@ -179,7 +179,7 @@ const editRepartoId = Astro.url.searchParams.get('editar');
       </div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:11px">
         {(repartos as any[]).map((r, i) => {
-          const colores = ['#e25555','#e9b949','#4ade80','#60a5fa','#c084fc','#fb923c','#34d399','#f87171'];
+          const colores = ['#e25555','#E5E5E5','#4ade80','#60a5fa','#c084fc','#fb923c','#34d399','#f87171'];
           return (
             <span style="display:flex;align-items:center;gap:4px">
               <span style={`width:10px;height:10px;border-radius:2px;background:${colores[i % colores.length]};opacity:.8;display:inline-block`}></span>

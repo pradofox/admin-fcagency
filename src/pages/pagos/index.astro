@@ -216,7 +216,7 @@ const fmt = (n: number | null | undefined) =>
   <div class="row" style="margin-bottom:12px">
     <div class="col card">
       <div class="card-meta">Por cobrar a clientes</div>
-      <div class="card-title mono" style="color:#e9b949">{fmt(totalCobrar)}</div>
+      <div class="card-title mono" style="color:#E5E5E5">{fmt(totalCobrar)}</div>
       <small class="text-muted">{cobros?.length ?? 0} produccion{cobros?.length !== 1 ? 'es' : ''}</small>
     </div>
     <div class="col card">
@@ -267,7 +267,7 @@ const fmt = (n: number | null | undefined) =>
     {(cobros && cobros.length > 0) ? (
       <div>
         {cobros.map((r: any) => (
-          <div class="card" style="margin-bottom:10px;border-left:3px solid #e9b949">
+          <div class="card" style="margin-bottom:10px;border-left:3px solid #E5E5E5">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px">
               <div style="flex:1">
                 <div style="font-weight:600">
@@ -282,7 +282,7 @@ const fmt = (n: number | null | undefined) =>
                 </div>
               </div>
               <div style="text-align:right;flex-shrink:0">
-                <div class="mono" style="color:#e9b949;font-size:18px">{fmt(r.total_cobrar)}</div>
+                <div class="mono" style="color:#E5E5E5;font-size:18px">{fmt(r.total_cobrar)}</div>
                 {editable && (
                   <form method="POST" action="/pagos" style="margin-top:8px">
                     <input type="hidden" name="_action" value="cliente_pago" />
