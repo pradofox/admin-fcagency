@@ -113,6 +113,9 @@ const fmt = (n: number) => `$${Math.round(n).toLocaleString('es-MX')}`;
       <h1>Catálogo de Servicios</h1>
       <small class="text-muted">Conceptos con precios y reparto interno a proveedores</small>
     </div>
+    <div style="display:flex;gap:8px">
+      <a href="/proveedores/personas" class="btn btn-sm">Directorio de proveedores →</a>
+    </div>
   </div>
 
   {error && <p class="text-danger" style="margin-bottom:16px">{error}</p>}

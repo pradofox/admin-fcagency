@@ -1,0 +1,211 @@
+---
+import Layout from '../../../components/Layout.astro';
+import { requireSection, canEdit } from '../../../lib/session';
+import { getDB, now } from '../../../lib/db';
+import { logAudit } from '../../../lib/audit';
+
+const user     = requireSection(Astro, 'proveedores');
+const editable = canEdit(user);
+const db       = getDB(Astro);
+const { id }   = Astro.params;
+
+const TIPOS = [
+  'Fotógrafo', 'Video', 'Modelo', 'Maquillaje', 'Peinado', 'Styling',
+  'Producción', 'Catering', 'Locación', 'Transporte', 'Audio',
+  'Iluminación', 'Arte / Set', 'Otro'
+];
+
+let error: string | null = null;
+let msgOk: string | null = null;
+
+if (Astro.request.method === 'POST' && editable) {
+  const form = await Astro.request.formData();
+  const action = form.get('_action') as string | null;
+
+  if (action === 'delete') {
+    const prev = await db.prepare('SELECT nombre FROM proveedores_directorio WHERE id = ?').bind(id).first<{ nombre: string }>();
+    await db.prepare('DELETE FROM proveedores_directorio WHERE id = ?').bind(id).run();
+    await logAudit(db, { user, accion: 'delete', entidad: 'reparto', entidad_id: id, entidad_label: prev?.nombre ?? null });
+    return Astro.redirect('/proveedores/personas');
+  }
+
+  const nombre = (form.get('nombre') as string)?.trim();
+  if (!nombre) {
+    error = 'El nombre es obligatorio.';
+  } else {
+    const get = (k: string) => { const v = form.get(k); return v === null || v === '' ? null : String(v).trim(); };
+    const tarifa = form.get('tarifa_base');
+    const tarifaNum = tarifa === null || tarifa === '' ? null : Number(tarifa) || null;
+    const activo = form.get('activo') === '1' ? 1 : 0;
+    await db
+      .prepare(
+        `UPDATE proveedores_directorio
+         SET nombre = ?, tipo = ?, email = ?, whatsapp = ?, instagram = ?, empresa = ?, rfc = ?,
+             tarifa_base = ?, tarifa_unidad = ?, ciudad = ?, notas = ?, activo = ?, updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(nombre, get('tipo'), get('email'), get('whatsapp'), get('instagram'), get('empresa'), get('rfc'),
+            tarifaNum, get('tarifa_unidad'), get('ciudad'), get('notas'), activo, now(), id)
+      .run();
+    await logAudit(db, { user, accion: 'update', entidad: 'reparto', entidad_id: id, entidad_label: nombre });
+    msgOk = 'Guardado.';
+  }
+}
+
+const prov = await db.prepare('SELECT * FROM proveedores_directorio WHERE id = ?').bind(id).first<any>();
+if (!prov) return Astro.redirect('/proveedores/personas');
+
+// Repartos en los que aparece como proveedor (por nombre, ya que la FK no existe aun)
+const { results: repartosRel } = await db
+  .prepare(`SELECT r.id, r.monto_mxn, r.rol, cs.id as concepto_id, cs.nombre as concepto_nombre
+            FROM repartos_concepto r
+            JOIN conceptos_servicio cs ON cs.id = r.concepto_id
+            WHERE r.proveedor_nombre = ?
+            ORDER BY cs.nombre`)
+  .bind(prov.nombre).all<any>();
+
+const tiposExistentesRow = (await db.prepare("SELECT DISTINCT tipo FROM proveedores_directorio WHERE tipo IS NOT NULL AND tipo != ''").all<{ tipo: string }>()).results ?? [];
+const tiposExistentes = tiposExistentesRow.map((r: any) => r.tipo);
+const tiposCombinados = [...new Set([...TIPOS, ...tiposExistentes])];
+
+const fmt = (n: number | null) => n ? `$${Math.round(n).toLocaleString('es-MX')}` : '—';
+---
+
+<Layout title={prov.nombre} pageTitle="Catálogo de Servicios">
+  <div class="page-head">
+    <div>
+      <h1 style="margin:0">{prov.nombre}</h1>
+      <div class="card-meta" style="margin-top:4px">
+        {prov.tipo && <span class="chip">{prov.tipo}</span>}
+        {prov.empresa && <span class="text-muted">{prov.empresa}</span>}
+        {!prov.activo && <span class="chip chip-danger" style="font-size:10px">inactivo</span>}
+      </div>
+    </div>
+    <a href="/proveedores/personas" class="btn btn-sm">← Directorio</a>
+  </div>
+
+  {error && <p class="text-danger" style="margin-bottom:16px">{error}</p>}
+  {msgOk && <p class="text-ok" style="margin-bottom:16px">{msgOk}</p>}
+
+  {/* Contactos rapidos */}
+  <div class="row" style="margin-bottom:24px">
+    <div class="col card">
+      <div class="card-meta">WhatsApp</div>
+      <div style="font-weight:600">{prov.whatsapp ?? <span class="text-muted">—</span>}</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Email</div>
+      <div style="font-weight:600;word-break:break-all">{prov.email ?? <span class="text-muted">—</span>}</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Instagram</div>
+      <div style="font-weight:600">{prov.instagram ? `@${prov.instagram.replace(/^@/, '')}` : <span class="text-muted">—</span>}</div>
+    </div>
+    <div class="col card">
+      <div class="card-meta">Tarifa base</div>
+      <div class="mono" style="color:var(--gold);font-weight:600">{fmt(prov.tarifa_base)}{prov.tarifa_unidad && prov.tarifa_base ? `/${prov.tarifa_unidad}` : ''}</div>
+    </div>
+  </div>
+
+  {/* Conceptos del catalogo donde aparece */}
+  {repartosRel && repartosRel.length > 0 && (
+    <div style="margin-bottom:24px">
+      <h2 style="margin-bottom:10px">Aparece en conceptos del catálogo</h2>
+      <div class="table-card">
+        <table>
+          <thead><tr><th>Concepto</th><th>Rol asignado</th><th class="right">Pago en reparto</th></tr></thead>
+          <tbody>
+            {(repartosRel as any[]).map((r) => (
+              <tr>
+                <td><a href={`/proveedores/${r.concepto_id}`} style="color:inherit;font-weight:500">{r.concepto_nombre}</a></td>
+                <td class="text-muted">{r.rol ?? '—'}</td>
+                <td class="right mono">{fmt(r.monto_mxn)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class="text-muted" style="font-size:11px;margin-top:6px">Vinculado por nombre. Si cambias el nombre del proveedor, actualiza también los conceptos donde aparece.</p>
+    </div>
+  )}
+
+  {/* Editar */}
+  {editable && (
+    <details style="background:var(--bg-2);border:1px solid var(--border);padding:18px;margin-bottom:24px" open>
+      <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">Editar datos</summary>
+      <form method="POST" action={`/proveedores/personas/${id}`} style="margin-top:14px">
+        <div class="row">
+          <div class="col" style="flex:2">
+            <label class="label">Nombre *</label>
+            <input class="input" name="nombre" value={prov.nombre} required />
+          </div>
+          <div class="col">
+            <label class="label">Tipo</label>
+            <input class="input" name="tipo" value={prov.tipo ?? ''} list="tipos_prov_edit" />
+            <datalist id="tipos_prov_edit">
+              {tiposCombinados.map((t) => <option value={t}></option>)}
+            </datalist>
+          </div>
+          <div class="col">
+            <label class="label">Empresa</label>
+            <input class="input" name="empresa" value={prov.empresa ?? ''} />
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <label class="label">Email</label>
+            <input class="input" type="email" name="email" value={prov.email ?? ''} />
+          </div>
+          <div class="col">
+            <label class="label">WhatsApp</label>
+            <input class="input" name="whatsapp" value={prov.whatsapp ?? ''} />
+          </div>
+          <div class="col">
+            <label class="label">Instagram</label>
+            <input class="input" name="instagram" value={prov.instagram ?? ''} />
+          </div>
+          <div class="col">
+            <label class="label">Ciudad</label>
+            <input class="input" name="ciudad" value={prov.ciudad ?? ''} />
+          </div>
+        </div>
+        <div class="row">
+          <div class="col">
+            <label class="label">Tarifa base MXN</label>
+            <input class="input" type="number" name="tarifa_base" min="0" step="1" value={prov.tarifa_base ?? ''} />
+          </div>
+          <div class="col">
+            <label class="label">Unidad de tarifa</label>
+            <select class="select" name="tarifa_unidad">
+              <option value="">— elegir —</option>
+              {['hora','dia','servicio'].map((u) => <option value={u} selected={prov.tarifa_unidad === u}>por {u}</option>)}
+            </select>
+          </div>
+          <div class="col">
+            <label class="label">RFC</label>
+            <input class="input" name="rfc" value={prov.rfc ?? ''} />
+          </div>
+          <div class="col" style="display:flex;align-items:flex-end;padding-bottom:8px">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+              <input type="checkbox" name="activo" value="1" checked={!!prov.activo} />
+              Activo
+            </label>
+          </div>
+        </div>
+        <label class="label">Notas internas</label>
+        <textarea class="textarea" name="notas" rows="3">{prov.notas ?? ''}</textarea>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button type="submit" class="btn btn-primary">Guardar cambios</button>
+        </div>
+      </form>
+
+      <div style="display:flex;gap:8px;margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+        <form method="POST" action={`/proveedores/personas/${id}`} style="display:inline"
+              onsubmit={`return confirm('¿Borrar a "${prov.nombre.replace(/"/g, '\\"')}" del directorio? Esta acción no se puede deshacer.')`}>
+          <input type="hidden" name="_action" value="delete" />
+          <button type="submit" class="btn btn-danger">Borrar del directorio</button>
+        </form>
+      </div>
+    </details>
+  )}
+</Layout>
