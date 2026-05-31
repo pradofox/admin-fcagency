@@ -410,7 +410,7 @@ const provPropIds = new Set((provsPropuestos ?? []).map((p: any) => p.proveedor_
 // Catálogo de conceptos con su reparto (para agregar al catálogo)
 const { results: conceptosCat } = await db
   .prepare(
-    `SELECT cs.id, cs.nombre, cs.rol, cs.precio_mxn, cs.precio_hora_adicional, cs.por_hora,
+    `SELECT cs.id, cs.nombre, cs.rol, cs.categoria, cs.precio_mxn, cs.precio_hora_adicional, cs.por_hora,
             json_group_array(json_object(
               'proveedor_nombre', r.proveedor_nombre,
               'rol', r.rol,
@@ -691,8 +691,11 @@ const ESTADOS_FLUJO = [
       // Solo "modelo editorial" usa la tarifa tier por horas. Modelo pasarela,
       // foto por modelo, etc. cobran por unidad/dia y van al form de servicios.
       const esModeloEditorial = (c: any) => {
+        const cat = String(c.categoria || '').toLowerCase();
+        // Excluye explicitamente todo lo de PASARELAS o RENTA / DAY PASS
+        if (/pasarel|renta|day\s*pass|catering|club/.test(cat)) return false;
         const blob = `${c.nombre || ''} ${c.rol || ''} ${c.categoria || ''}`.toLowerCase();
-        return /modelo/i.test(blob) && /editorial/i.test(blob);
+        return /\bmodelo\b/.test(blob) && /editorial/.test(blob);
       };
       const conceptosModelo  = proveedoresData.filter(esModeloEditorial);
       const conceptosServicio = proveedoresData.filter((c: any) => !esModeloEditorial(c));
