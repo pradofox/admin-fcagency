@@ -897,106 +897,10 @@ const ROLES = [
     </div>
   </div>
 
-  <h2 style="margin-top:32px">Líneas de producción</h2>
-  <p class="text-muted" style="font-size:12px;margin-bottom:16px">
-    Cada línea es un proveedor o modelo asignado. El pago al proveedor se calcula
-    automáticamente como cobro × (100 − comisión)/100.
-  </p>
-
-  {lineas && lineas.length > 0 ? (
-    <div class="table-card" style="margin-bottom:16px">
-      <table>
-        <thead>
-          <tr>
-            <th>Rol</th>
-            <th>Nombre</th>
-            <th>Llamado</th>
-            {verPrecios && <th class="right">Cobro</th>}
-            {verPrecios && <th class="right">Comisión</th>}
-            {verPrecios && <th class="right">Pago</th>}
-            <th>Estado</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {lineas.map((l) => (
-            <tr>
-              <td><span class="chip">{l.rol}</span></td>
-              <td>{l.nombre_libre ?? <span class="text-muted">—</span>}</td>
-              <td class="mono text-muted">{l.hora_llamado ?? '—'}</td>
-              {verPrecios && <td class="right mono">{fmt(l.cobro_cliente)}</td>}
-              {verPrecios && <td class="right mono text-muted">{l.comision_pct}%</td>}
-              {verPrecios && <td class="right mono text-gold">{fmt(l.pago_proveedor)}</td>}
-              <td>
-                {editable ? (
-                  <form method="POST" action={`/producciones/${id}`} style="display:inline">
-                    <input type="hidden" name="_action" value="toggle_linea_pagada" />
-                    <input type="hidden" name="linea_id" value={l.id} />
-                    <input type="hidden" name="nuevo_estado" value={l.estado === 'pagado' ? 'pendiente' : 'pagado'} />
-                    <button type="submit" class={`chip ${l.estado === 'pagado' ? 'chip-ok' : 'chip-warning'}`} style="border:0;cursor:pointer;font-family:var(--font-mono)">
-                      {l.estado}
-                    </button>
-                  </form>
-                ) : (
-                  <span class={`chip ${l.estado === 'pagado' ? 'chip-ok' : 'chip-warning'}`}>{l.estado}</span>
-                )}
-              </td>
-              <td class="right">
-                {editable && (
-                  <form method="POST" action={`/producciones/${id}`} onsubmit="return confirm('¿Eliminar esta línea?')" style="display:inline">
-                    <input type="hidden" name="_action" value="delete_linea" />
-                    <input type="hidden" name="linea_id" value={l.id} />
-                    <button type="submit" class="btn btn-sm btn-danger" style="padding:2px 7px">×</button>
-                  </form>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  ) : (
-    <p class="text-muted" style="margin-bottom:16px">Aún no hay líneas.</p>
-  )}
-
-  <details style="background:var(--bg-2);border:1px solid var(--border);padding:20px;margin-bottom:32px">
-    <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">+ Agregar línea</summary>
-    <form method="POST" action={`/producciones/${id}`} style="margin-top:16px">
-      <input type="hidden" name="_action" value="add_linea" />
-      <div class="row">
-        <div class="col">
-          <label class="label">Rol</label>
-          <select class="select" name="linea_rol" id="linea_rol" required>
-            {ROLES.map((r) => <option value={r}>{r}</option>)}
-          </select>
-        </div>
-        <div class="col" id="col_modelo" style="display:none">
-          <label class="label">Modelo registrado</label>
-          <select class="select" name="linea_modelo_id" id="linea_modelo_id">
-            <option value="">— sin vincular / externo —</option>
-            {(modelosActivos as any[])?.map((m) => <option value={m.id}>{m.nombre}</option>)}
-          </select>
-        </div>
-        <div class="col">
-          <label class="label">Nombre</label>
-          <input class="input" name="linea_nombre" id="linea_nombre" placeholder="Persona o proveedor" />
-        </div>
-        <div class="col">
-          <label class="label">Hora de llamado</label>
-          <input class="input" type="time" name="linea_hora_llamado" id="linea_hora_llamado" />
-        </div>
-        <div class="col">
-          <label class="label">Cobro al cliente (MXN)</label>
-          <input class="input" type="number" step="0.01" name="linea_cobro" required />
-        </div>
-        <div class="col">
-          <label class="label">Comisión %</label>
-          <input class="input" type="number" step="0.01" name="linea_comision" value="20" />
-        </div>
-      </div>
-      <button type="submit" class="btn btn-primary" style="margin-top:16px">Agregar</button>
-    </form>
-  </details>
+  {/* La sección "Líneas de producción" se eliminó: era duplicada con
+      "Equipo asignado" arriba. Para agregar gente fuera del catálogo
+      usa la tarjeta "+ Agregar otro" del equipo. Los montos (cobro,
+      comisión, pago, estado) se gestionan desde /pagos por línea. */}
 
   <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:32px;margin-bottom:14px">
     <h2 style="margin:0">Tareas</h2>
@@ -1048,25 +952,5 @@ const ROLES = [
     .ficha-val { font-size:14px; }
   </style>
 
-  <script>
-    function syncModeloPicker() {
-      const rol = (document.getElementById('linea_rol') as HTMLSelectElement | null)?.value;
-      const col = document.getElementById('col_modelo');
-      const sel = document.getElementById('linea_modelo_id') as HTMLSelectElement | null;
-      const nom = document.getElementById('linea_nombre') as HTMLInputElement | null;
-      if (col) col.style.display = rol === 'Modelo' ? '' : 'none';
-      if (rol !== 'Modelo' && sel) sel.value = '';
-      // Al elegir un modelo, autollenar el nombre
-      if (sel && nom && sel.value) {
-        nom.value = sel.options[sel.selectedIndex]?.textContent?.trim() ?? nom.value;
-      }
-    }
-    document.getElementById('linea_rol')?.addEventListener('change', syncModeloPicker);
-    document.getElementById('linea_modelo_id')?.addEventListener('change', () => {
-      const sel = document.getElementById('linea_modelo_id') as HTMLSelectElement;
-      const nom = document.getElementById('linea_nombre') as HTMLInputElement | null;
-      if (nom && sel.value) nom.value = sel.options[sel.selectedIndex]?.textContent?.trim() ?? '';
-    });
-    syncModeloPicker();
-  </script>
+  {/* JS del antiguo form "Agregar linea" eliminado junto con el form. */}
 </Layout>
