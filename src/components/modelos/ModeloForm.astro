@@ -22,6 +22,7 @@ interface Modelo {
   book?: number | null;
   videocasting?: number | null;
   drive_folder?: string | null;
+  link_perfil_web?: string | null;
   material_actualizado_en?: string | null;
   material_notas?: string | null;
 }
@@ -147,6 +148,10 @@ const edadInicial = calcularEdad(modelo.cumpleanos);
     <div class="col" style="flex:2">
       <label class="label">Carpeta de material (Drive)</label>
       <input class="input" name="drive_folder" value={modelo.drive_folder ?? ''} placeholder="https://drive.google.com/..." />
+    </div>
+    <div class="col" style="flex:2">
+      <label class="label">Link a perfil del sitio web</label>
+      <input class="input" name="link_perfil_web" value={modelo.link_perfil_web ?? ''} placeholder="https://fcagency.mx/modelos/..." />
     </div>
     <div class="col">
       <label class="label">Última actualización de material</label>

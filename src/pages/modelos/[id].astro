@@ -46,7 +46,7 @@ if (Astro.request.method === 'POST' && editable) {
           nombre = ?, email = ?, whatsapp = ?, instagram = ?, cumpleanos = ?, genero = ?,
           estatura_cm = ?, busto_cm = ?, cintura_cm = ?, cadera_cm = ?, calzado_mx = ?,
           cabello = ?, ojos = ?, ciudad = ?, talentos = ?, notas = ?, estado = ?,
-          polas = ?, book = ?, videocasting = ?, drive_folder = ?,
+          polas = ?, book = ?, videocasting = ?, drive_folder = ?, link_perfil_web = ?,
           material_actualizado_en = ?, material_notas = ?, updated_at = ?
         WHERE id = ?`
       )
@@ -72,6 +72,7 @@ if (Astro.request.method === 'POST' && editable) {
         chk('book'),
         chk('videocasting'),
         get('drive_folder'),
+        get('link_perfil_web'),
         get('material_actualizado_en'),
         get('material_notas'),
         now(),
@@ -249,6 +250,22 @@ const colorEstado: Record<string, string> = {
       </div>
     </div>
   </div>
+
+  {/* ── Accesos rapidos: Drive material + Sitio web ── */}
+  {(modelo.drive_folder || modelo.link_perfil_web) && (
+    <div style="display:flex;gap:8px;margin-bottom:24px;flex-wrap:wrap">
+      {modelo.drive_folder && (
+        <a href={modelo.drive_folder} target="_blank" rel="noopener" class="btn btn-sm">
+          📂 Ver material en Drive
+        </a>
+      )}
+      {modelo.link_perfil_web && (
+        <a href={modelo.link_perfil_web} target="_blank" rel="noopener" class="btn btn-sm">
+          🌐 Ver perfil en sitio web
+        </a>
+      )}
+    </div>
+  )}
 
   {/* ── Agenda / próximas producciones ── */}
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
