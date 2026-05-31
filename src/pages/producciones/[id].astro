@@ -408,8 +408,11 @@ const { results: modelosActivos } = await db
 const { results: provDir } = await db
   .prepare(`SELECT id, nombre, tipo, email, whatsapp, instagram FROM proveedores_directorio WHERE activo = 1 ORDER BY nombre`)
   .all<any>();
-const fotografos = (provDir ?? []).filter((p: any) => /foto/i.test(p.tipo ?? ''));
-const maquillistas = (provDir ?? []).filter((p: any) => /maquill|peinado|mua/i.test(p.tipo ?? ''));
+// Normalizar acentos: "Fotógrafo" -> "Fotografo" para que el regex matchee.
+// Sin esto, /foto/i no matchea "Fotógrafo" porque la 'ó' rompe el substring.
+const sinTildes = (s: string) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
+const fotografos = (provDir ?? []).filter((p: any) => /foto/i.test(sinTildes(p.tipo ?? '')));
+const maquillistas = (provDir ?? []).filter((p: any) => /maquill|peinado|mua/i.test(sinTildes(p.tipo ?? '')));
 
 // Equipo asignado: TODAS las lineas con su tipo deducido (modelo/foto/mua/otro).
 const { results: equipoAsignado } = await db
