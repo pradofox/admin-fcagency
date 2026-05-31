@@ -124,6 +124,151 @@ if (Astro.request.method === 'POST' && editable) {
     }
   }
 
+  // ── Agregar modelo al equipo (autocomplete desde el roster) ──────────────
+  if (action === 'add_equipo_modelo') {
+    const modeloId = (form.get('modelo_id') as string)?.trim();
+    const rol = (form.get('rol') as string)?.trim() || 'Modelo';
+    if (modeloId) {
+      const mm = await db.prepare('SELECT nombre FROM modelos WHERE id = ?').bind(modeloId).first<any>();
+      if (mm) {
+        await db
+          .prepare(
+            `INSERT INTO lineas_produccion (id, produccion_id, rol, nombre_libre, modelo_id, cobro_cliente, comision_pct, estado, created_at)
+             VALUES (?, ?, ?, ?, ?, 0, 20, 'pendiente', ?)`
+          )
+          .bind(newId(), id, rol, mm.nombre, modeloId, now())
+          .run();
+      }
+    }
+    return Astro.redirect(`/producciones/${id}#equipo`);
+  }
+
+  // ── Agregar proveedor del directorio (fotografo/maquillista/otro) ────────
+  if (action === 'add_equipo_proveedor') {
+    const provId = (form.get('proveedor_dir_id') as string)?.trim();
+    const rol = (form.get('rol') as string)?.trim() || 'Otro';
+    if (provId) {
+      const pp = await db.prepare('SELECT nombre FROM proveedores_directorio WHERE id = ?').bind(provId).first<any>();
+      if (pp) {
+        await db
+          .prepare(
+            `INSERT INTO lineas_produccion (id, produccion_id, rol, nombre_libre, cobro_cliente, comision_pct, estado, created_at)
+             VALUES (?, ?, ?, ?, 0, 20, 'pendiente', ?)`
+          )
+          .bind(newId(), id, rol, pp.nombre, now())
+          .run();
+      }
+    }
+    return Astro.redirect(`/producciones/${id}#equipo`);
+  }
+
+  // ── Mandar invite Google Calendar por email a UNA persona del equipo ────
+  if (action === 'enviar_invite_gcal') {
+    const lineaId = (form.get('linea_id') as string)?.trim();
+    if (lineaId) {
+      const linea = await db
+        .prepare(
+          `SELECT lp.id, lp.rol, lp.hora_llamado, lp.modelo_id, lp.nombre_libre,
+                  m.nombre as modelo_nombre, m.email as modelo_email, m.ics_token
+           FROM lineas_produccion lp
+           LEFT JOIN modelos m ON m.id = lp.modelo_id
+           WHERE lp.id = ? AND lp.produccion_id = ?`
+        )
+        .bind(lineaId, id).first<any>();
+
+      if (linea) {
+        const esModelo = !!linea.modelo_id;
+        let email = linea.modelo_email ?? null;
+        let nombre = linea.modelo_nombre ?? linea.nombre_libre ?? '';
+
+        if (!esModelo && linea.nombre_libre) {
+          const prov = await db
+            .prepare('SELECT email, nombre FROM proveedores_directorio WHERE LOWER(nombre) = LOWER(?) LIMIT 1')
+            .bind(linea.nombre_libre).first<any>();
+          if (prov) { email = prov.email; nombre = prov.nombre; }
+        }
+
+        if (!email) {
+          avisoMsg = `${nombre} no tiene email registrado. Captúralo en su perfil para mandar el invite.`;
+        } else {
+          const prodRow = await db.prepare('SELECT * FROM producciones WHERE id = ?').bind(id).first<any>();
+          const cli = prodRow?.cliente_id
+            ? await db.prepare('SELECT nombre FROM clientes WHERE id = ?').bind(prodRow.cliente_id).first<any>()
+            : null;
+          const runtime = (Astro.locals as any).runtime;
+          const resendKey = runtime?.env?.RESEND_API_KEY;
+          const appUrl    = runtime?.env?.APP_URL ?? Astro.url.origin;
+
+          // Construir links de calendario (mismo formato que avisos.ts)
+          const fechaFmt = prodRow.fecha_inicio ? formatFecha(prodRow.fecha_inicio) : null;
+          const horario  = prodRow.hora_inicio ? `${prodRow.hora_inicio}${prodRow.hora_fin ? ' – ' + prodRow.hora_fin : ''}` : null;
+          let gcalEventUrl: string | null = null;
+          if (prodRow.fecha_inicio) {
+            const ymd = String(prodRow.fecha_inicio).slice(0, 10).replace(/-/g, '');
+            let dates = `${ymd}/${ymd}`;
+            if (prodRow.hora_inicio) {
+              const hi = String(prodRow.hora_inicio).replace(':', '') + '00';
+              const hf = prodRow.hora_fin ? String(prodRow.hora_fin).replace(':', '') + '00' : hi;
+              dates = `${ymd}T${hi}/${ymd}T${hf}`;
+            }
+            const params = new URLSearchParams({
+              action: 'TEMPLATE',
+              text: `${prodRow.titulo}${linea.rol ? ' — ' + linea.rol : ''}`,
+              dates,
+              details: `Producción FC Agency${cli?.nombre ? ' · ' + cli.nombre : ''}${linea.hora_llamado ? '\\nTu llamado: ' + linea.hora_llamado : ''}${prodRow.notas ? '\\n\\n' + prodRow.notas : ''}`,
+              location: [prodRow.ubicacion_shoot, prodRow.ubicacion_mua, prodRow.ubicacion].filter(Boolean).join(' · '),
+            });
+            gcalEventUrl = `https://calendar.google.com/calendar/render?${params.toString()}`;
+          }
+
+          let icsFeedUrl: string | null = null;
+          if (esModelo) {
+            let token = linea.ics_token;
+            if (!token) {
+              token = crypto.randomUUID().replace(/-/g, '');
+              await db.prepare('UPDATE modelos SET ics_token = ? WHERE id = ?').bind(token, linea.modelo_id).run();
+            }
+            icsFeedUrl = `${appUrl}/api/ics/modelo/${token}.ics`;
+          }
+
+          const html = (await import('../../lib/email')).buildConvocatoriaHtml({
+            esRecordatorio: false,
+            saludoNombre: nombre.split(' ')[0] ?? null,
+            rol: linea.rol,
+            horaLlamado: linea.hora_llamado,
+            produccionTitulo: prodRow.titulo,
+            cliente: cli?.nombre ?? null,
+            tipo: prodRow.tipo_produccion ?? null,
+            fecha: fechaFmt,
+            horario,
+            ubicacionMua: prodRow.ubicacion_mua ?? null,
+            ubicacionShoot: prodRow.ubicacion_shoot ?? null,
+            notas: prodRow.notas ?? null,
+            icsFeedUrl,
+            gcalEventUrl,
+          });
+
+          const { sendEmail } = await import('../../lib/email');
+          const r = await sendEmail({
+            to: email,
+            subject: `Invite calendario: ${prodRow.titulo}${fechaFmt ? ' · ' + fechaFmt : ''}`,
+            html,
+          }, resendKey);
+
+          await db
+            .prepare(
+              `INSERT INTO notificaciones (id, produccion_id, tipo, destinatario_tipo, destinatario_nombre, email, estado, detalle, enviado_en)
+               VALUES (?, ?, 'convocatoria', ?, ?, ?, ?, ?, ?)`
+            )
+            .bind(newId(), id, esModelo ? 'modelo' : 'proveedor', nombre, email, r.ok ? 'enviado' : 'error', r.error ?? null, now())
+            .run();
+
+          avisoMsg = r.ok ? `Invite mandado a ${nombre} (${email}).` : `Falló el envío a ${email}: ${r.error}`;
+        }
+      }
+    }
+  }
+
   if (action === 'delete_linea') {
     const lineaId = form.get('linea_id') as string;
     if (lineaId) {
@@ -253,22 +398,70 @@ const { results: tareasProd } = await db
   .bind(id)
   .all<any>();
 
-// Modelos registrados (para el selector al agregar línea de modelo)
+// Modelos registrados (para autocomplete de modelos en el equipo)
 const { results: modelosActivos } = await db
-  .prepare(`SELECT id, nombre FROM modelos WHERE estado != 'archivado' ORDER BY nombre`)
+  .prepare(`SELECT id, nombre, instagram FROM modelos WHERE estado = 'activo' ORDER BY nombre`)
   .all<any>();
 
-// Modelos asignados a esta producción (líneas con modelo_id)
-const { results: modelosAsignados } = await db
+// Proveedores del directorio, agrupados por categoria relevante.
+// Para los buscadores de Fotografo / Maquillista.
+const { results: provDir } = await db
+  .prepare(`SELECT id, nombre, tipo, email, whatsapp, instagram FROM proveedores_directorio WHERE activo = 1 ORDER BY nombre`)
+  .all<any>();
+const fotografos = (provDir ?? []).filter((p: any) => /foto/i.test(p.tipo ?? ''));
+const maquillistas = (provDir ?? []).filter((p: any) => /maquill|peinado|mua/i.test(p.tipo ?? ''));
+
+// Equipo asignado: TODAS las lineas con su tipo deducido (modelo/foto/mua/otro).
+const { results: equipoAsignado } = await db
   .prepare(
-    `SELECT DISTINCT m.id, m.nombre, lp.rol
+    `SELECT lp.id as linea_id, lp.rol, lp.nombre_libre, lp.modelo_id, lp.hora_llamado, lp.estado,
+            m.nombre as modelo_nombre, m.email as modelo_email
      FROM lineas_produccion lp
-     JOIN modelos m ON m.id = lp.modelo_id
+     LEFT JOIN modelos m ON m.id = lp.modelo_id
      WHERE lp.produccion_id = ? AND lp.estado != 'cancelado'
-     ORDER BY m.nombre`
+     ORDER BY
+       CASE
+         WHEN lp.modelo_id IS NOT NULL THEN 0
+         WHEN lp.rol LIKE '%otograf%' THEN 1
+         WHEN lp.rol LIKE '%aquill%' OR lp.rol LIKE '%MUA%' THEN 2
+         ELSE 3
+       END,
+       COALESCE(m.nombre, lp.nombre_libre)`
   )
   .bind(id)
   .all<any>();
+
+// Mapa de email/whatsapp/instagram desde el directorio para los proveedores
+// asignados (match por nombre_libre).
+const provByNombre = new Map<string, any>((provDir ?? []).map((p: any) => [String(p.nombre).toLowerCase(), p]));
+
+const equipo = (equipoAsignado ?? []).map((l: any) => {
+  const esModelo = !!l.modelo_id;
+  const nombre = l.modelo_nombre ?? l.nombre_libre ?? '—';
+  const provInfo = !esModelo ? provByNombre.get(String(nombre).toLowerCase()) : null;
+  const tipo = esModelo ? 'modelo'
+    : /otograf/i.test(l.rol ?? '') ? 'fotografo'
+    : /(aquill|peinado|MUA)/i.test(l.rol ?? '') ? 'maquillista'
+    : 'otro';
+  return {
+    linea_id: l.linea_id,
+    nombre,
+    rol: l.rol,
+    tipo,
+    hora_llamado: l.hora_llamado,
+    email: esModelo ? l.modelo_email : (provInfo?.email ?? null),
+    instagram: esModelo ? null : (provInfo?.instagram ?? null),
+    whatsapp: esModelo ? null : (provInfo?.whatsapp ?? null),
+    modelo_id: l.modelo_id,
+  };
+});
+
+const equipoPorTipo = {
+  modelo:      equipo.filter((e) => e.tipo === 'modelo'),
+  fotografo:   equipo.filter((e) => e.tipo === 'fotografo'),
+  maquillista: equipo.filter((e) => e.tipo === 'maquillista'),
+  otro:        equipo.filter((e) => e.tipo === 'otro'),
+};
 
 // Nombres resueltos para la ficha
 const clienteNombre = prod.cliente_id ? (clientes.find((c: any) => c.id === prod.cliente_id)?.nombre ?? null) : null;
@@ -383,28 +576,176 @@ const ROLES = [
           <div class="ficha-val mono" style="color:var(--gold)">{prod.presupuesto ? fmt(prod.presupuesto) : '—'}</div>
         </div>
       )}
-      <div class="ficha-item">
-        <div class="ficha-label">Equipo involucrado</div>
-        <div class="ficha-val">{prod.equipo_involucrado ?? <span class="text-muted">—</span>}</div>
-      </div>
+      {/* Equipo involucrado se ve abajo en la seccion "Equipo asignado" */}
     </div>
   </div>
 
-  {/* ── Modelos asignados ── */}
-  <div class="card" style="margin-bottom:24px">
-    <div class="card-meta" style="margin-bottom:8px">Modelos asignados</div>
-    {modelosAsignados && modelosAsignados.length > 0 ? (
-      <div style="display:flex;flex-wrap:wrap;gap:8px">
-        {(modelosAsignados as any[]).map((m) => (
-          <a href={`/modelos/${m.id}`} class="chip" style="text-decoration:none;color:var(--gold)">
-            {m.nombre}{m.rol ? <span class="text-muted" style="margin-left:5px;font-size:10px">{m.rol}</span> : null}
-          </a>
-        ))}
+  {/* ── Equipo asignado ── */}
+  <div id="equipo" style="margin-bottom:32px">
+    <h2 style="margin-bottom:14px">Equipo asignado</h2>
+
+    {/* Buscadores: Modelo, Fotógrafo, Maquillista */}
+    {editable && (
+      <div class="row" style="margin-bottom:18px">
+        {/* Modelos */}
+        <div class="col card" style="border-left:3px solid var(--gold)">
+          <div class="card-meta" style="margin-bottom:8px">Agregar modelo</div>
+          <form method="POST" action={`/producciones/${id}`} id="form_eq_modelo">
+            <input type="hidden" name="_action" value="add_equipo_modelo" />
+            <input type="hidden" name="modelo_id" id="eq_modelo_id" />
+            <input class="input" id="eq_modelo_search" list="dl_modelos"
+                   placeholder="Buscar modelo por nombre o @ig…" autocomplete="off" />
+            <datalist id="dl_modelos">
+              {(modelosActivos as any[]).map((m) => (
+                <option value={m.nombre}>{m.instagram ? '@'+m.instagram.replace(/^@/, '') : ''}</option>
+              ))}
+            </datalist>
+            <input class="input" name="rol" value="Modelo" style="margin-top:6px;font-size:11px" />
+            <button type="submit" class="btn btn-sm btn-primary" style="margin-top:6px;width:100%">+ Agregar</button>
+          </form>
+        </div>
+
+        {/* Fotógrafo */}
+        <div class="col card">
+          <div class="card-meta" style="margin-bottom:8px">Agregar fotógrafo</div>
+          {fotografos.length === 0 ? (
+            <p class="text-muted" style="font-size:11px">No hay fotógrafos en el <a href="/proveedores/personas" style="color:var(--gold)">directorio</a>. Da uno de alta primero.</p>
+          ) : (
+            <form method="POST" action={`/producciones/${id}`} id="form_eq_foto">
+              <input type="hidden" name="_action" value="add_equipo_proveedor" />
+              <input type="hidden" name="proveedor_dir_id" id="eq_foto_id" />
+              <input type="hidden" name="rol" value="Fotografía" />
+              <input class="input" id="eq_foto_search" list="dl_fotografos"
+                     placeholder="Buscar fotógrafo…" autocomplete="off" />
+              <datalist id="dl_fotografos">
+                {fotografos.map((p: any) => <option value={p.nombre}>{p.instagram ? '@'+p.instagram.replace(/^@/, '') : ''}</option>)}
+              </datalist>
+              <button type="submit" class="btn btn-sm btn-primary" style="margin-top:6px;width:100%">+ Agregar</button>
+            </form>
+          )}
+        </div>
+
+        {/* Maquillista */}
+        <div class="col card">
+          <div class="card-meta" style="margin-bottom:8px">Agregar maquillaje</div>
+          {maquillistas.length === 0 ? (
+            <p class="text-muted" style="font-size:11px">No hay maquillistas en el <a href="/proveedores/personas" style="color:var(--gold)">directorio</a>. Da una de alta primero.</p>
+          ) : (
+            <form method="POST" action={`/producciones/${id}`} id="form_eq_mua">
+              <input type="hidden" name="_action" value="add_equipo_proveedor" />
+              <input type="hidden" name="proveedor_dir_id" id="eq_mua_id" />
+              <input type="hidden" name="rol" value="Maquillaje" />
+              <input class="input" id="eq_mua_search" list="dl_maquillistas"
+                     placeholder="Buscar maquillista…" autocomplete="off" />
+              <datalist id="dl_maquillistas">
+                {maquillistas.map((p: any) => <option value={p.nombre}>{p.instagram ? '@'+p.instagram.replace(/^@/, '') : ''}</option>)}
+              </datalist>
+              <button type="submit" class="btn btn-sm btn-primary" style="margin-top:6px;width:100%">+ Agregar</button>
+            </form>
+          )}
+        </div>
       </div>
+    )}
+
+    {/* Lista de equipo agrupada por tipo */}
+    {equipo.length === 0 ? (
+      <p class="text-muted" style="font-size:12px">Sin nadie asignado todavía. Usa los buscadores de arriba para sumar gente del catálogo.</p>
     ) : (
-      <p class="text-muted" style="font-size:12px;margin:0">Sin modelos registrados vinculados. Agrégalos como línea con rol "Modelo" eligiendo el modelo del catálogo.</p>
+      <div>
+        {(['modelo', 'fotografo', 'maquillista', 'otro'] as const).map((tipo) => {
+          const items = equipoPorTipo[tipo];
+          if (items.length === 0) return null;
+          const label = tipo === 'modelo' ? 'Modelos' : tipo === 'fotografo' ? 'Fotógrafos' : tipo === 'maquillista' ? 'Maquillistas' : 'Otros';
+          return (
+            <div style="margin-bottom:14px">
+              <div class="text-muted" style="font-size:10.5px;letter-spacing:.15em;text-transform:uppercase;margin-bottom:6px">{label} ({items.length})</div>
+              <div class="table-card">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Nombre</th>
+                      <th>Rol</th>
+                      <th>Llamado</th>
+                      <th>Contacto</th>
+                      <th class="right"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((e) => (
+                      <tr>
+                        <td style="font-weight:500">
+                          {e.modelo_id ? <a href={`/modelos/${e.modelo_id}`} style="color:inherit">{e.nombre}</a> : e.nombre}
+                          {e.instagram && <span class="text-muted" style="font-size:10px;margin-left:6px">@{e.instagram.replace(/^@/, '')}</span>}
+                        </td>
+                        <td><span class="chip" style="font-size:10px">{e.rol}</span></td>
+                        <td class="mono text-muted">{e.hora_llamado ?? '—'}</td>
+                        <td class="text-muted" style="font-size:11px">
+                          {e.email ?? (e.whatsapp ?? <span class="text-muted">sin contacto</span>)}
+                        </td>
+                        <td style="text-align:right;white-space:nowrap">
+                          {editable && e.email && (
+                            <form method="POST" action={`/producciones/${id}`} style="display:inline">
+                              <input type="hidden" name="_action" value="enviar_invite_gcal" />
+                              <input type="hidden" name="linea_id" value={e.linea_id} />
+                              <button type="submit" class="btn btn-sm" title="Mandar invite por correo con botón Google Calendar">📅 Invite</button>
+                            </form>
+                          )}
+                          {editable && (
+                            <form method="POST" action={`/producciones/${id}`} style="display:inline;margin-left:4px"
+                                  onsubmit="return confirm('¿Quitar a esta persona del equipo?')">
+                              <input type="hidden" name="_action" value="delete_linea" />
+                              <input type="hidden" name="linea_id" value={e.linea_id} />
+                              <button type="submit" class="btn btn-sm btn-danger" title="Quitar del equipo">×</button>
+                            </form>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     )}
   </div>
+
+  <script is:inline define:vars={{
+    modelos: modelosActivos ?? [],
+    fotografos,
+    maquillistas,
+  }}>
+    // Convierte nombre escrito -> id antes del submit, usando los datasets
+    // pasados desde el server. Si no se encontró coincidencia exacta, bloquea
+    // el submit y avisa.
+    function wireAutocomplete(formId, searchId, hiddenId, source, idKey) {
+      const form = document.getElementById(formId);
+      const inp  = document.getElementById(searchId);
+      const hid  = document.getElementById(hiddenId);
+      if (!form || !inp || !hid) return;
+      const map = new Map();
+      source.forEach(function (s) {
+        map.set(String(s.nombre).toLowerCase(), s[idKey]);
+        if (s.instagram) map.set('@' + String(s.instagram).replace(/^@/, '').toLowerCase(), s[idKey]);
+      });
+      function resolve() {
+        hid.value = map.get(String(inp.value || '').trim().toLowerCase()) || '';
+      }
+      inp.addEventListener('input', resolve);
+      inp.addEventListener('change', resolve);
+      form.addEventListener('submit', function (e) {
+        resolve();
+        if (!hid.value) {
+          e.preventDefault();
+          alert('Elige una opción de la lista de sugerencias.');
+        }
+      });
+    }
+    wireAutocomplete('form_eq_modelo', 'eq_modelo_search', 'eq_modelo_id', modelos, 'id');
+    wireAutocomplete('form_eq_foto',   'eq_foto_search',   'eq_foto_id',   fotografos, 'id');
+    wireAutocomplete('form_eq_mua',    'eq_mua_search',    'eq_mua_id',    maquillistas, 'id');
+  </script>
 
   {/* ── Avisos y recordatorios ── */}
   <div class="card" style="margin-bottom:24px">

@@ -132,8 +132,9 @@ const TIPOS_PRODUCCION = [
     </div>
   </div>
 
-  <label class="label">Equipo involucrado</label>
-  <input class="input" name="equipo_involucrado" value={produccion.equipo_involucrado ?? ''} placeholder="Foto: ___, Video: ___, MUA: ___" />
+  {/* El equipo ahora se gestiona desde la seccion "Equipo asignado" en
+      /producciones/[id] con buscadores conectados a modelos y al directorio
+      de proveedores. Este campo de texto libre se quito. */}
 
   <label class="label">Material pendiente</label>
   <textarea class="textarea" name="material_pendiente" placeholder="Qué falta entregar o producir">{produccion.material_pendiente ?? ''}</textarea>
