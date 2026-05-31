@@ -126,6 +126,32 @@ export function buildConvocatoriaHtml(d: ConvocatoriaData): string {
 </html>`;
 }
 
+/** Email de invitacion de un admin a un nuevo usuario. */
+export function buildInvitationHtml(
+  link: string,
+  nombre: string,
+  rolLabel: string,
+  invitadoPor: string
+): string {
+  return `<!DOCTYPE html>
+<html>
+  <body style="background:#080808;color:#F5F5F5;font-family:'Inter',system-ui,-apple-system,sans-serif;padding:40px 20px;margin:0">
+    <div style="max-width:480px;margin:0 auto;background:#0E0E0E;border:1px solid #262626;border-radius:6px;padding:36px 32px">
+      <div style="font-size:13px;font-weight:600;color:#C9A84C;letter-spacing:.08em;text-transform:uppercase;margin-bottom:20px">FC Agency · Invitación</div>
+      <p style="font-size:14px;line-height:1.6;margin:0 0 12px;color:#F5F5F5">Hola ${nombre},</p>
+      <p style="font-size:14px;line-height:1.6;margin:0 0 20px;color:#B3B3B3">
+        ${invitadoPor} te invitó a la plataforma admin de FC Agency con el rol de <strong style="color:#F5F5F5">${rolLabel}</strong>.
+      </p>
+      <p style="font-size:14px;line-height:1.6;margin:0 0 24px;color:#B3B3B3">
+        Da click en el botón para entrar. El link funciona por <strong>24 horas</strong>. Después podrás pedir uno nuevo desde la pantalla de login.
+      </p>
+      <a href="${link}" style="display:inline-block;background:#FFFFFF;color:#000;padding:11px 26px;font-size:13px;text-decoration:none;font-weight:600;border-radius:4px">Entrar a FC Admin</a>
+      <p style="font-size:11.5px;color:#808080;line-height:1.6;margin:30px 0 0">Si no esperabas esta invitación, ignora este correo. Cualquier duda, responde aquí.</p>
+    </div>
+  </body>
+</html>`;
+}
+
 function buildEmailHtml(link: string): string {
   return `<!DOCTYPE html>
 <html>

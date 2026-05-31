@@ -3,6 +3,7 @@ import { now } from './db';
 import type { SessionUser } from '../env';
 
 const TOKEN_EXPIRY_MS = 15 * 60 * 1000; // 15 min
+const INVITE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 horas para invitaciones
 const SESSION_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000; // 30 días
 export const SESSION_COOKIE = 'fc_session';
 
@@ -58,6 +59,69 @@ export async function createAuthToken(db: D1Database, email: string): Promise<st
     .bind(id, emailNorm, token, ts + TOKEN_EXPIRY_MS, ts)
     .run();
   return token;
+}
+
+/**
+ * Crea (o reactiva) una cuenta con rol especificado por el admin
+ * que esta invitando y genera el primer magic-link token.
+ *
+ * Devuelve { token, userId, status } donde status es 'creado',
+ * 'existente_actualizado' o 'rechazado' (si el user ya estaba activo
+ * con un rol distinto — el admin debe cambiarlo a mano).
+ */
+export async function inviteUser(
+  db: D1Database,
+  email: string,
+  nombre: string,
+  rol: 'admin' | 'editor' | 'viewer'
+): Promise<{ token: string; userId: string; status: 'creado' | 'reactivado' | 'ya_existia' } | { error: string }> {
+  const emailNorm = email.trim().toLowerCase();
+  if (!emailNorm || !nombre.trim()) return { error: 'Email y nombre son obligatorios.' };
+
+  let user = await db
+    .prepare('SELECT id, rol, activo FROM users WHERE email = ?')
+    .bind(emailNorm)
+    .first<{ id: string; rol: string; activo: number }>();
+
+  const ts = now();
+  let status: 'creado' | 'reactivado' | 'ya_existia';
+  let userId: string;
+
+  if (!user) {
+    userId = newId();
+    await db
+      .prepare(
+        `INSERT INTO users (id, email, nombre, rol, marcas, activo, created_at, updated_at)
+         VALUES (?, ?, ?, ?, '[]', 1, ?, ?)`
+      )
+      .bind(userId, emailNorm, nombre.trim(), rol, ts, ts)
+      .run();
+    status = 'creado';
+  } else if (!user.activo) {
+    // Reactivar y actualizar rol/nombre
+    userId = user.id;
+    await db
+      .prepare('UPDATE users SET nombre = ?, rol = ?, activo = 1, updated_at = ? WHERE id = ?')
+      .bind(nombre.trim(), rol, ts, userId)
+      .run();
+    status = 'reactivado';
+  } else {
+    // Ya existe activo: actualiza rol y nombre (sobreescribe), reenvía link.
+    userId = user.id;
+    await db
+      .prepare('UPDATE users SET nombre = ?, rol = ?, updated_at = ? WHERE id = ?')
+      .bind(nombre.trim(), rol, ts, userId)
+      .run();
+    status = 'ya_existia';
+  }
+
+  const token = newToken();
+  await db
+    .prepare('INSERT INTO auth_tokens (id, email, token, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
+    .bind(newId(), emailNorm, token, ts + INVITE_EXPIRY_MS, ts)
+    .run();
+
+  return { token, userId, status };
 }
 
 /** Verifica el token; si es válido, lo consume, crea sesión y retorna el session_id. */

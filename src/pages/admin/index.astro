@@ -3,18 +3,56 @@ import Layout from '../../components/Layout.astro';
 import { requireAdmin, labelRol } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { logAudit } from '../../lib/audit';
+import { inviteUser } from '../../lib/auth';
+import { sendEmail, buildInvitationHtml } from '../../lib/email';
 
 const user = requireAdmin(Astro);
 const db = getDB(Astro);
 
 let mensaje: string | null = null;
+let mensajeError: string | null = null;
 
 if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   const action = form.get('_action') as string;
-  const userId = form.get('user_id') as string;
 
-  const target = await db.prepare('SELECT email, nombre, rol, activo FROM users WHERE id = ?').bind(userId).first<{ email: string; nombre: string; rol: string; activo: number }>();
+  // ── Invitar nuevo usuario (no requiere userId previo) ────────────────────
+  if (action === 'invitar') {
+    const email = (form.get('email') as string)?.trim().toLowerCase() || '';
+    const nombre = (form.get('nombre') as string)?.trim() || '';
+    const rol = (form.get('rol') as string) || 'viewer';
+    if (!email || !nombre) {
+      mensajeError = 'Email y nombre son obligatorios.';
+    } else if (!['admin', 'editor', 'viewer'].includes(rol)) {
+      mensajeError = 'Rol invalido.';
+    } else {
+      const res = await inviteUser(db as any, email, nombre, rol as any);
+      if ('error' in res) {
+        mensajeError = res.error;
+      } else {
+        // Construir el link y mandar el correo
+        const origin = Astro.url.origin;
+        const link = `${origin}/auth/verify?token=${res.token}`;
+        const runtime = (Astro.locals as any).runtime;
+        const apiKey = runtime?.env?.RESEND_API_KEY;
+        const html = buildInvitationHtml(link, nombre, labelRol(rol), user.nombre);
+        const sendRes = await sendEmail({ to: email, subject: `Invitación a FC Admin como ${labelRol(rol)}`, html }, apiKey);
+        await logAudit(db, { user, accion: 'create', entidad: 'usuario', entidad_id: res.userId, entidad_label: `${nombre} (${email})`, payload: { rol, status: res.status, email_enviado: sendRes.ok } });
+        if (sendRes.ok) {
+          mensaje = res.status === 'ya_existia'
+            ? `${nombre} ya tenía cuenta; rol actualizado a ${labelRol(rol)} y se mandó link nuevo a ${email}.`
+            : `Invitación enviada a ${email} con rol ${labelRol(rol)} (válida 24 horas).`;
+        } else {
+          mensaje = `Cuenta creada con rol ${labelRol(rol)}, pero el envío de email falló: ${sendRes.error}. Link manual: ${link}`;
+        }
+      }
+    }
+  }
+
+  const userId = form.get('user_id') as string;
+  const target = userId
+    ? await db.prepare('SELECT email, nombre, rol, activo FROM users WHERE id = ?').bind(userId).first<{ email: string; nombre: string; rol: string; activo: number }>()
+    : null;
   const label = target ? `${target.nombre} (${target.email})` : null;
 
   if (action === 'change_rol') {
@@ -82,7 +120,40 @@ function nombreMarca(mid: string): string {
     <br /><span class="text-muted">El scope de marcas se aplica al reiniciar sesión del usuario.</span>
   </div>
 
-  {mensaje && <p class="text-ok" style="margin-bottom:20px">{mensaje}</p>}
+  {mensaje      && <p class="text-ok"      style="margin-bottom:20px">{mensaje}</p>}
+  {mensajeError && <p class="text-danger"  style="margin-bottom:20px">{mensajeError}</p>}
+
+  {/* ── Invitar nuevo usuario ── */}
+  <details style="background:var(--bg-2);border:1px solid var(--border);padding:18px;margin-bottom:24px">
+    <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">
+      + Invitar nuevo usuario
+    </summary>
+    <form method="POST" action="/admin" style="margin-top:14px">
+      <input type="hidden" name="_action" value="invitar" />
+      <div class="row">
+        <div class="col" style="flex:2">
+          <label class="label">Nombre completo *</label>
+          <input class="input" name="nombre" required placeholder="Ej. Andrea Martínez" />
+        </div>
+        <div class="col" style="flex:2">
+          <label class="label">Email *</label>
+          <input class="input" type="email" name="email" required placeholder="andrea@fcagency.mx" />
+        </div>
+        <div class="col">
+          <label class="label">Rol *</label>
+          <select class="select" name="rol" required>
+            <option value="viewer">Team (solo operativo, sin precios)</option>
+            <option value="editor" selected>Project Manager (todo menos catálogo y ganancias)</option>
+            <option value="admin">Admin (todo)</option>
+          </select>
+        </div>
+      </div>
+      <p class="text-muted" style="font-size:11px;margin-top:8px">
+        Se manda un correo con un link de acceso (válido 24 horas) directo al rol elegido. Si ya tiene cuenta, se actualiza su rol y se reenvía el link.
+      </p>
+      <button type="submit" class="btn btn-primary" style="margin-top:8px">Mandar invitación</button>
+    </form>
+  </details>
 
   <div style="overflow-x:auto">
     <table style="width:100%;border-collapse:collapse;font-size:13px">
