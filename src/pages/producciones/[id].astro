@@ -73,6 +73,18 @@ if (Astro.request.method === 'POST' && editable) {
     return Astro.redirect('/producciones');
   }
 
+  if (action === 'toggle_cerrada') {
+    const prev = await db.prepare('SELECT titulo, cerrada FROM producciones WHERE id = ?').bind(id).first<{ titulo: string; cerrada: number }>();
+    const nuevoEstado = prev?.cerrada ? 0 : 1;
+    const ts = now();
+    await db
+      .prepare('UPDATE producciones SET cerrada = ?, cerrada_en = ?, updated_at = ? WHERE id = ?')
+      .bind(nuevoEstado, nuevoEstado ? ts : null, ts, id)
+      .run();
+    await logAudit(db, { user, accion: 'state_change', entidad: 'produccion', entidad_id: id, entidad_label: prev?.titulo ?? null, payload: { cerrada: nuevoEstado } });
+    return Astro.redirect(`/producciones/${id}`);
+  }
+
   if (action === 'add_linea') {
     const lineaId = newId();
     const ts = now();
@@ -508,9 +520,28 @@ const ROLES = [
 
 <Layout title={`Editar — ${prod.titulo}`} pageTitle={prod.titulo}>
   <div class="page-head">
-    <h1>{prod.titulo}</h1>
-    <div style="display:flex;gap:10px">
+    <div>
+      <h1 style="margin:0">
+        {prod.titulo}
+        {prod.cerrada ? <span class="chip chip-ok" style="margin-left:10px;font-size:11px;vertical-align:middle">✓ Cerrada</span> : null}
+      </h1>
+      {prod.cerrada && prod.cerrada_en && (
+        <div class="text-muted" style="font-size:11px;margin-top:4px">
+          Cerrada el {new Date(prod.cerrada_en).toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' })}
+        </div>
+      )}
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
       <a href="/producciones" class="btn btn-sm">Volver</a>
+      {editable && (
+        <form method="POST" action={`/producciones/${id}`} style="display:inline"
+              onsubmit={`return confirm('${prod.cerrada ? "¿Reabrir esta producción?" : "¿Cerrar esta producción? Marca el proyecto como saldado y archivado. Puedes reabrirlo después si hace falta."}')`}>
+          <input type="hidden" name="_action" value="toggle_cerrada" />
+          <button type="submit" class={prod.cerrada ? 'btn btn-sm' : 'btn btn-sm btn-primary'}>
+            {prod.cerrada ? '↩ Reabrir' : '✓ Cerrar producción'}
+          </button>
+        </form>
+      )}
       {editable && (
         <form method="POST" action={`/producciones/${id}`} onsubmit="return confirm('¿Eliminar esta producción y todas sus líneas?')" style="display:inline">
           <input type="hidden" name="_method" value="DELETE" />

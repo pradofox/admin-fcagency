@@ -19,6 +19,7 @@ interface Props {
     pago_modelo_estado?: string | null;
     material_recibido?: number | null;
     retro_enviada?: number | null;
+    cerrada?: number | null;
   };
 }
 const { produccion } = Astro.props;
@@ -41,9 +42,12 @@ const materialPendiente = !produccion.material_recibido;
 const retroPendiente = !produccion.retro_enviada;
 ---
 
-<a href={`/producciones/${produccion.id}`} style="display:block;color:inherit;text-decoration:none">
+<a href={`/producciones/${produccion.id}`} style={`display:block;color:inherit;text-decoration:none${produccion.cerrada ? ';opacity:.55' : ''}`}>
   <article class="card">
-    <div class="card-title">{produccion.titulo}</div>
+    <div class="card-title">
+      {produccion.titulo}
+      {produccion.cerrada ? <span class="chip chip-ok" style="margin-left:8px;font-size:9px">✓ cerrada</span> : null}
+    </div>
     <div class="card-meta">
       <span class={`chip ${chipClass[produccion.estado] ?? ''}`}>{produccion.estado.replace('_', ' ')}</span>
       {produccion.tipo_produccion && <span class="chip">{produccion.tipo_produccion}</span>}

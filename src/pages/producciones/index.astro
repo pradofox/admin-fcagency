@@ -26,6 +26,7 @@ const search = (Astro.url.searchParams.get('q') ?? '').trim();
 const baseSelect = `SELECT p.id, p.titulo, p.marca_id, p.fecha_inicio, p.estado, p.ubicacion_shoot,
                             p.tipo_produccion, p.cliente_id, p.proximo_paso, p.fecha_proxima_accion,
                             p.pago_cliente_estado, p.pago_modelo_estado, p.material_recibido, p.retro_enviada,
+                            p.cerrada, p.cerrada_en,
                             c.nombre as cliente_nombre,
                             (SELECT SUM(lp.cobro_cliente) FROM lineas_produccion lp WHERE lp.produccion_id = p.id) as total_cobro
                      FROM producciones p
@@ -55,7 +56,13 @@ if (filtroFlag === 'pago_cliente_pendiente') where.push("(p.pago_cliente_estado 
 if (filtroFlag === 'pago_modelo_pendiente') where.push("(p.pago_modelo_estado IS NULL OR p.pago_modelo_estado = 'por_pagar')");
 if (filtroFlag === 'material_pendiente') where.push('(p.material_recibido = 0 OR p.material_pendiente IS NOT NULL)');
 if (filtroFlag === 'retro_pendiente') where.push('p.retro_enviada = 0');
-if (filtroFlag === 'cerradas') where.push("p.estado IN ('completada','cancelada')");
+if (filtroFlag === 'cerradas') {
+  where.push("p.cerrada = 1");
+} else {
+  // Por default ocultamos las cerradas en cualquier otro filtro para
+  // no inundar la lista. Solo "cerradas" muestra las cerradas.
+  where.push("(p.cerrada IS NULL OR p.cerrada = 0)");
+}
 
 const sql = `${baseSelect}${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY p.fecha_inicio DESC, p.created_at DESC LIMIT 200`;
 const stmt = binds.length ? db.prepare(sql).bind(...binds) : db.prepare(sql);
