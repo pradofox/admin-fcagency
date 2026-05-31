@@ -103,3 +103,12 @@ export async function GET(context: APIContext): Promise<Response> {
     },
   });
 }
+
+// Google Calendar / Apple Calendar hacen HEAD primero para validar que el
+// feed exista antes de suscribir. Astro no genera HEAD por defecto y devolvia
+// 404, lo que hacia que Google rechazara la URL con "calendar no soportado".
+// Reusamos la misma respuesta sin body.
+export async function HEAD(context: APIContext): Promise<Response> {
+  const res = await GET(context);
+  return new Response(null, { status: res.status, headers: res.headers });
+}
