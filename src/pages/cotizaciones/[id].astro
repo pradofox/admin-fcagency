@@ -57,8 +57,12 @@ if (Astro.request.method === 'POST' && editable) {
       const precioBase = concepto.precio_mxn ?? 0;
       const horaAd = concepto.precio_hora_adicional ?? null;
       const porHora = horaAd != null && horaAd > 0;
-      // Las horas solo cuentan si el concepto se cobra por hora.
-      const esPorHora = !!concepto.por_hora || porHora;
+      // Las horas cuentan SOLO cuando el concepto es de modelo (regla de
+      // negocio de FC: solo modelos se cobran por horas en el cotizador).
+      // Esto coincide con el frontend que solo muestra el input Horas para
+      // conceptos cuyo rol o nombre contiene "modelo".
+      const esModelo = /modelo/i.test(String(concepto.rol ?? '')) || /modelo/i.test(String(concepto.nombre ?? ''));
+      const esPorHora = esModelo;
 
       const cantRaw  = form.get('cantidad');
       const cantidad = cantRaw === null || cantRaw === '' ? 1 : Math.max(1, Number(cantRaw) || 1);
@@ -701,7 +705,7 @@ const ESTADOS_FLUJO = [
             <label class="label" id="lbl_cantidad_cat">Cantidad</label>
             <input class="input" type="number" name="cantidad" id="inp_cantidad_cat" min="1" step="1" value="1" onchange="onProvChange()" oninput="onProvChange()" style="width:120px" />
           </div>
-          <div style="min-width:90px" id="col_horas_cat">
+          <div style="min-width:90px;display:none" id="col_horas_cat">
             <label class="label" id="lbl_horas_cat">Horas</label>
             <input class="input" type="number" name="horas" id="inp_horas_cat" min="1" step="0.5" value="1" onchange="onProvChange()" oninput="onProvChange()" style="width:120px" />
           </div>
@@ -1033,17 +1037,14 @@ function onProvChange() {
   const precioBase = concepto.precio_mxn || 0;
   const horaAd = concepto.precio_hora_adicional;
   const porHora = horaAd != null && horaAd > 0;
-  const esPorHora = !!concepto.por_hora || porHora;
 
-  // Campo Horas SIEMPRE visible (por default). Solo lo ocultamos si el
-  // concepto definitivamente no se cobra por hora — esto es mas seguro
-  // para que Lili pueda capturar horas en conceptos de modelo aunque la
-  // configuracion de por_hora se quede atras por algun caching.
-  const colHoras = document.getElementById('col_horas_cat');
-  if (colHoras) colHoras.style.display = '';
-
-  // Labels mas claras cuando el concepto es de modelo
+  // Campo Horas SOLO aparece cuando el concepto es de modelos.
+  // Para cualquier otro concepto se oculta y horas se ignora (=1).
   const esModelo = /modelo/i.test(String(concepto.rol || '')) || /modelo/i.test(String(concepto.nombre || ''));
+  const colHoras = document.getElementById('col_horas_cat');
+  if (colHoras) colHoras.style.display = esModelo ? '' : 'none';
+
+  // Labels mas claras cuando es modelo
   const lblCant = document.getElementById('lbl_cantidad_cat');
   const lblHoras = document.getElementById('lbl_horas_cat');
   if (lblCant)  lblCant.textContent  = esModelo ? 'Cantidad de modelos' : 'Cantidad';
@@ -1051,7 +1052,9 @@ function onProvChange() {
 
   let cantidad = parseFloat(document.getElementById('inp_cantidad_cat')?.value || '1') || 1;
   if (cantidad < 1) cantidad = 1;
-  let horas = esPorHora ? (parseFloat(document.getElementById('inp_horas_cat')?.value || '1') || 1) : 1;
+  // Para modelos siempre usamos las horas capturadas (no dependemos del flag
+  // por_hora que puede estar en 0 para algun concepto nuevo).
+  let horas = esModelo ? (parseFloat(document.getElementById('inp_horas_cat')?.value || '1') || 1) : 1;
   if (horas < 1) horas = 1;
 
   // Subtotal: tiered (1ª hora + extras) × cantidad, o precio × cantidad × horas.
