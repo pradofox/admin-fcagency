@@ -99,6 +99,40 @@ if (Astro.request.method === 'POST') {
       .bind(JSON.stringify(marcasSel), now(), userId).run();
     await logAudit(db, { user, accion: 'update', entidad: 'usuario', entidad_id: userId, entidad_label: label, payload: { marcas: marcasSel } });
     mensaje = 'Marcas asignadas. El usuario debe reiniciar sesión para aplicar el cambio.';
+  } else if (action === 'delete_user') {
+    // Eliminar usuario definitivamente. Protecciones:
+    // - No auto-borrarse.
+    // - No borrar al ultimo admin activo.
+    // - El audit_log queda con snapshot del nombre/email (no FK), asi
+    //   sobrevive al borrado.
+    if (!target) {
+      mensajeError = 'Usuario no encontrado.';
+    } else if (userId === user.id) {
+      mensajeError = 'No puedes borrar tu propia cuenta. Pide a otro admin que lo haga.';
+    } else {
+      const adminsActivos = await db
+        .prepare("SELECT COUNT(*) as c FROM users WHERE rol = 'admin' AND activo = 1")
+        .first<{ c: number }>();
+      if (target.rol === 'admin' && target.activo === 1 && (adminsActivos?.c ?? 0) <= 1) {
+        mensajeError = 'No puedes borrar al último admin activo. Promueve a otro admin primero.';
+      } else {
+        // Cerrar sesiones y soltar refs huerfanas antes del DELETE
+        await db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId).run();
+        await db.prepare('DELETE FROM auth_tokens WHERE email = ?').bind(target.email).run();
+        // Soltar created_by en entidades para no romper FK (LEFT JOIN en queries existentes)
+        await db.prepare('UPDATE modelos SET created_by = NULL WHERE created_by = ?').bind(userId).run();
+        await db.prepare('UPDATE cotizaciones SET created_by = NULL WHERE created_by = ?').bind(userId).run();
+        await db.prepare('UPDATE briefs SET created_by = NULL WHERE created_by = ?').bind(userId).run();
+        // Notas y tareas asignadas: dejar el snapshot del nombre, soltar el id.
+        try { await db.prepare('UPDATE notas SET autor_user_id = NULL WHERE autor_user_id = ?').bind(userId).run(); } catch {}
+        try { await db.prepare('UPDATE acciones_calendario SET asignado_a = NULL WHERE asignado_a = ?').bind(userId).run(); } catch {}
+        try { await db.prepare('UPDATE acciones_calendario SET asignado_por = NULL WHERE asignado_por = ?').bind(userId).run(); } catch {}
+        // Finalmente borrar el user
+        await db.prepare('DELETE FROM users WHERE id = ?').bind(userId).run();
+        await logAudit(db, { user, accion: 'delete', entidad: 'usuario', entidad_id: userId, entidad_label: label });
+        mensaje = `Usuario ${label} eliminado definitivamente. Sus contribuciones (modelos, cotizaciones, etc.) se conservan sin autor asignado.`;
+      }
+    }
   }
 }
 
@@ -258,12 +292,21 @@ function nombreMarca(mid: string): string {
             <td style="padding:12px 10px;color:var(--text-2);font-size:12px">
               {u.ultimo_login ? new Date(u.ultimo_login).toLocaleDateString('es-MX') : <span class="text-muted">—</span>}
             </td>
-            <td style="padding:12px 10px">
+            <td style="padding:12px 10px;white-space:nowrap">
               <form method="POST" action="/admin" onsubmit="return confirm('¿Cerrar todas las sesiones de este usuario?')" style="display:inline">
                 <input type="hidden" name="_action" value="delete_sessions" />
                 <input type="hidden" name="user_id" value={u.id} />
                 <button type="submit" class="btn btn-sm">Cerrar sesiones</button>
               </form>
+              {u.id !== user.id && (
+                <form method="POST" action="/admin"
+                      onsubmit={`return confirm('¿Eliminar a "${u.nombre.replace(/"/g, '\\"')}" (${u.email}) DEFINITIVAMENTE?\\n\\nSus modelos, cotizaciones y briefs creados se conservan sin autor asignado. Sus sesiones activas se cierran. El historial de auditoría queda con su nombre como snapshot.')`}
+                      style="display:inline;margin-left:4px">
+                  <input type="hidden" name="_action" value="delete_user" />
+                  <input type="hidden" name="user_id" value={u.id} />
+                  <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
+                </form>
+              )}
             </td>
           </tr>
         ))}
