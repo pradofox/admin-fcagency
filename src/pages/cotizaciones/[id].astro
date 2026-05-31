@@ -197,6 +197,32 @@ if (Astro.request.method === 'POST' && editable) {
     return Astro.redirect(`/cotizaciones/${id}#modelos`);
   }
 
+  // ── Agregar proveedor del directorio (equipo de produccion) ───────────────
+  if (action === 'add_prov_cot') {
+    const provId = form.get('proveedor_dir_id') as string;
+    const rol    = (form.get('rol') as string)?.trim() || null;
+    if (provId) {
+      try {
+        await db
+          .prepare('INSERT INTO cotizacion_proveedores (id, cotizacion_id, proveedor_dir_id, rol, created_at) VALUES (?, ?, ?, ?, ?)')
+          .bind(newId(), id, provId, rol, now())
+          .run();
+      } catch { /* UNIQUE: ya estaba */ }
+      await db.prepare('UPDATE cotizaciones SET updated_at = ? WHERE id = ?').bind(now(), id).run();
+    }
+    return Astro.redirect(`/cotizaciones/${id}#equipo`);
+  }
+
+  // ── Quitar proveedor propuesto ────────────────────────────────────────────
+  if (action === 'remove_prov_cot') {
+    const cpId = form.get('cp_id') as string;
+    if (cpId) {
+      await db.prepare('DELETE FROM cotizacion_proveedores WHERE id = ? AND cotizacion_id = ?').bind(cpId, id).run();
+      await db.prepare('UPDATE cotizaciones SET updated_at = ? WHERE id = ?').bind(now(), id).run();
+    }
+    return Astro.redirect(`/cotizaciones/${id}#equipo`);
+  }
+
   // ── Convertir a proyecto ───────────────────────────────────────────────────
   if (action === 'convertir') {
     const cot = await db.prepare('SELECT * FROM cotizaciones WHERE id = ?').bind(id).first<any>();
@@ -245,6 +271,28 @@ if (Astro.request.method === 'POST' && editable) {
           .prepare(`INSERT INTO bookings (id, produccion_id, modelo_id, rol, estado, notas, created_at)
                     VALUES (?, ?, ?, ?, 'tentativo', ?, ?)`)
           .bind(newId(), prodId, m.modelo_id, m.rol, m.notas, ts)
+          .run();
+        // Tambien como linea_produccion para que aparezca en "Equipo asignado"
+        const modeloNombre = await db.prepare('SELECT nombre FROM modelos WHERE id = ?').bind(m.modelo_id).first<any>();
+        await db
+          .prepare(`INSERT INTO lineas_produccion (id, produccion_id, rol, nombre_libre, modelo_id, cobro_cliente, comision_pct, estado, created_at)
+                    VALUES (?, ?, ?, ?, ?, 0, 20, 'pendiente', ?)`)
+          .bind(newId(), prodId, m.rol ?? 'Modelo', modeloNombre?.nombre ?? null, m.modelo_id, ts)
+          .run();
+      }
+
+      // Equipo de produccion (proveedores del directorio) propuesto: lineas
+      const { results: provsProp } = await db
+        .prepare(`SELECT cp.rol, cp.notas, pd.nombre
+                  FROM cotizacion_proveedores cp
+                  JOIN proveedores_directorio pd ON pd.id = cp.proveedor_dir_id
+                  WHERE cp.cotizacion_id = ?`)
+        .bind(id).all<{ rol: string | null; notas: string | null; nombre: string }>();
+      for (const p of (provsProp ?? [])) {
+        await db
+          .prepare(`INSERT INTO lineas_produccion (id, produccion_id, rol, nombre_libre, cobro_cliente, comision_pct, estado, created_at)
+                    VALUES (?, ?, ?, ?, 0, 20, 'pendiente', ?)`)
+          .bind(newId(), prodId, p.rol ?? 'Otro', p.nombre, ts)
           .run();
       }
 
@@ -333,6 +381,22 @@ const { results: modelosCat } = await db
   .prepare("SELECT id, nombre, instagram, ciudad FROM modelos WHERE estado = 'activo' ORDER BY nombre")
   .all<{ id: string; nombre: string; instagram: string | null; ciudad: string | null }>();
 const propIds = new Set((modelosPropuestos ?? []).map((m: any) => m.modelo_id));
+
+// Equipo de produccion propuesto: proveedores del directorio asignados
+const { results: provsPropuestos } = await db
+  .prepare(`SELECT cp.id, cp.proveedor_dir_id, cp.rol, cp.notas,
+                   pd.nombre, pd.tipo, pd.instagram, pd.whatsapp, pd.email
+            FROM cotizacion_proveedores cp
+            JOIN proveedores_directorio pd ON pd.id = cp.proveedor_dir_id
+            WHERE cp.cotizacion_id = ?
+            ORDER BY pd.tipo, pd.nombre`)
+  .bind(id).all<any>();
+
+// Directorio activo para el selector (todos los proveedores)
+const { results: provDirCat } = await db
+  .prepare("SELECT id, nombre, tipo, instagram FROM proveedores_directorio WHERE activo = 1 ORDER BY tipo, nombre")
+  .all<{ id: string; nombre: string; tipo: string | null; instagram: string | null }>();
+const provPropIds = new Set((provsPropuestos ?? []).map((p: any) => p.proveedor_dir_id));
 
 // Catálogo de conceptos con su reparto (para agregar al catálogo)
 const { results: conceptosCat } = await db
@@ -793,6 +857,93 @@ const ESTADOS_FLUJO = [
     </script>
     {(modelosCat?.length ?? 0) === 0 && (
       <p class="text-muted" style="font-size:11px">No hay modelos activos en el roster.</p>
+    )}
+  </div>
+
+  {/* ── Equipo de producción propuesto (del directorio de proveedores) ── */}
+  <div id="equipo" style="margin-bottom:32px">
+    <h2 style="margin-bottom:12px">
+      Equipo de producción propuesto
+      <small class="text-muted" style="font-size:12px;letter-spacing:0;font-family:var(--font-body);text-transform:none">
+        {provsPropuestos?.length ?? 0}
+      </small>
+    </h2>
+    {provsPropuestos && provsPropuestos.length > 0 ? (
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+        {(provsPropuestos as any[]).map((p) => (
+          <div style="display:flex;align-items:center;gap:6px;background:var(--bg-2);border:1px solid var(--border);padding:6px 10px;border-radius:20px;font-size:12px">
+            <a href={`/proveedores/personas/${p.proveedor_dir_id}`} style="color:inherit;font-weight:600">{p.nombre}</a>
+            {p.tipo && <span class="text-muted">· {p.tipo}</span>}
+            {p.rol && p.rol !== p.tipo && <span class="text-muted">· {p.rol}</span>}
+            {p.instagram && <span class="text-muted" style="font-size:11px">@{p.instagram.replace(/^@/, '')}</span>}
+            {editable && cot.estado !== 'convertida' && (
+              <form method="POST" action={`/cotizaciones/${id}`} style="display:inline;margin-left:4px">
+                <input type="hidden" name="_action" value="remove_prov_cot" />
+                <input type="hidden" name="cp_id" value={p.id} />
+                <button type="submit" class="btn btn-sm btn-danger" title="Quitar del equipo"
+                        style="padding:1px 6px;font-size:11px;line-height:1;border-radius:50%">×</button>
+              </form>
+            )}
+          </div>
+        ))}
+      </div>
+    ) : (
+      <p class="text-muted" style="font-size:12px;margin-bottom:12px">Sin equipo propuesto aún. Agrega del directorio abajo.</p>
+    )}
+
+    {editable && cot.estado !== 'convertida' && (provDirCat?.length ?? 0) > 0 && (
+      <form method="POST" action={`/cotizaciones/${id}`}
+            style="display:flex;gap:6px;align-items:flex-end;background:var(--bg-2);border:1px solid var(--border);padding:12px;border-radius:4px"
+            id="form_add_prov_cot">
+        <input type="hidden" name="_action" value="add_prov_cot" />
+        <input type="hidden" name="proveedor_dir_id" id="prov_dir_id_hidden" required />
+        <div style="flex:2">
+          <label class="label">Buscar proveedor del directorio (fotógrafo, maquillista, catering, etc.)</label>
+          <input class="input" id="prov_dir_search" list="dl_provs_directorio" placeholder="Escribe para buscar..." autocomplete="off" required />
+          <datalist id="dl_provs_directorio">
+            {(provDirCat as any[]).filter((p) => !provPropIds.has(p.id)).map((p) => (
+              <option value={p.nombre}>{[p.tipo, p.instagram && '@'+p.instagram.replace(/^@/, '')].filter(Boolean).join(' · ')}</option>
+            ))}
+          </datalist>
+        </div>
+        <div style="flex:1">
+          <label class="label">Rol (opcional)</label>
+          <input class="input" name="rol" placeholder="Ej. Fotografía principal" />
+        </div>
+        <button type="submit" class="btn btn-primary">+ Agregar</button>
+      </form>
+    )}
+
+    <script is:inline define:vars={{ provsDisponibles: (provDirCat ?? []).filter((p: any) => !provPropIds.has(p.id)) }}>
+      // Resuelve nombre escrito -> id antes del submit (igual que modelos)
+      (function () {
+        const inp    = document.getElementById('prov_dir_search');
+        const hidden = document.getElementById('prov_dir_id_hidden');
+        const form   = document.getElementById('form_add_prov_cot');
+        if (!inp || !hidden || !form) return;
+        const map = new Map();
+        provsDisponibles.forEach(function (p) {
+          map.set(String(p.nombre).toLowerCase(), p.id);
+        });
+        function resolve() {
+          hidden.value = map.get(String(inp.value || '').trim().toLowerCase()) || '';
+        }
+        inp.addEventListener('input', resolve);
+        inp.addEventListener('change', resolve);
+        form.addEventListener('submit', function (e) {
+          resolve();
+          if (!hidden.value) {
+            e.preventDefault();
+            alert('Elige un proveedor de la lista (escribe el nombre y selecciona la sugerencia).');
+          }
+        });
+      })();
+    </script>
+
+    {(provDirCat?.length ?? 0) === 0 && (
+      <p class="text-muted" style="font-size:11px">
+        No hay proveedores en el <a href="/proveedores/personas" style="color:var(--gold)">directorio</a>. Da uno de alta primero.
+      </p>
     )}
   </div>
 
