@@ -1,12 +1,12 @@
 ---
 import Layout from '../../components/Layout.astro';
-import { requireUser, canEdit, isAdmin } from '../../lib/session';
+import { requireSection, canEdit, isAdmin } from '../../lib/session';
 import { logAudit } from '../../lib/audit';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 import { formatFecha } from '../../lib/fechas';
 
-const user = requireUser(Astro);
+const user = requireSection(Astro, 'cotizaciones');
 const editable = canEdit(user);
 const verMargen = isAdmin(user);
 const db = getDB(Astro);
@@ -742,16 +742,18 @@ const ESTADOS_FLUJO = [
 
     {editable && cot.estado !== 'convertida' && (modelosCat?.length ?? 0) > 0 && (
       <form method="POST" action={`/cotizaciones/${id}`}
-            style="display:flex;gap:6px;align-items:flex-end;background:var(--bg-2);border:1px solid var(--border);padding:12px;border-radius:4px">
+            style="display:flex;gap:6px;align-items:flex-end;background:var(--bg-2);border:1px solid var(--border);padding:12px;border-radius:4px"
+            id="form_add_modelo_cot">
         <input type="hidden" name="_action" value="add_modelo_cot" />
+        <input type="hidden" name="modelo_id" id="modelo_id_hidden" required />
         <div style="flex:2">
-          <label class="label">Agregar modelo del roster</label>
-          <select class="select" name="modelo_id" required>
-            <option value="">— elegir modelo —</option>
+          <label class="label">Buscar modelo por nombre, instagram o ciudad</label>
+          <input class="input" id="modelo_search" list="modelos_disponibles" placeholder="Escribe para buscar..." autocomplete="off" required />
+          <datalist id="modelos_disponibles">
             {(modelosCat as any[]).filter((m) => !propIds.has(m.id)).map((m) => (
-              <option value={m.id}>{m.nombre}{m.ciudad ? ` · ${m.ciudad}` : ''}</option>
+              <option value={m.nombre} data-id={m.id}>{[m.instagram && `@${m.instagram.replace(/^@/, '')}`, m.ciudad].filter(Boolean).join(' · ')}</option>
             ))}
-          </select>
+          </datalist>
         </div>
         <div style="flex:1">
           <label class="label">Rol (opcional)</label>
@@ -760,6 +762,35 @@ const ESTADOS_FLUJO = [
         <button type="submit" class="btn btn-primary">+ Agregar</button>
       </form>
     )}
+
+    <script is:inline define:vars={{ modelosDisponibles: (modelosCat ?? []).filter((m: any) => !propIds.has(m.id)) }}>
+      // Resuelve nombre escrito -> id antes del submit. Tolera coincidencias por
+      // nombre exacto, por instagram (@usuario) o por id directo.
+      (function () {
+        const inp    = document.getElementById('modelo_search');
+        const hidden = document.getElementById('modelo_id_hidden');
+        const form   = document.getElementById('form_add_modelo_cot');
+        if (!inp || !hidden || !form) return;
+        const map = new Map();
+        modelosDisponibles.forEach(function (m) {
+          map.set(m.nombre.toLowerCase(), m.id);
+          if (m.instagram) map.set('@' + m.instagram.replace(/^@/, '').toLowerCase(), m.id);
+        });
+        function resolve() {
+          const v = (inp.value || '').trim().toLowerCase();
+          hidden.value = map.get(v) || '';
+        }
+        inp.addEventListener('input', resolve);
+        inp.addEventListener('change', resolve);
+        form.addEventListener('submit', function (e) {
+          resolve();
+          if (!hidden.value) {
+            e.preventDefault();
+            alert('Elige un modelo de la lista (escribe el nombre y selecciona la sugerencia).');
+          }
+        });
+      })();
+    </script>
     {(modelosCat?.length ?? 0) === 0 && (
       <p class="text-muted" style="font-size:11px">No hay modelos activos en el roster.</p>
     )}

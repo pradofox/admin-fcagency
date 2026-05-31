@@ -1,12 +1,12 @@
 ---
 import Layout from '../../components/Layout.astro';
 import EmptyState from '../../components/EmptyState.astro';
-import { requireUser, canEdit, isAdmin } from '../../lib/session';
+import { requireSection, canEdit, isAdmin } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 import { logAudit } from '../../lib/audit';
 
-const user      = requireUser(Astro);
+const user      = requireSection(Astro, 'proveedores');
 const editable  = canEdit(user);
 const verMargen = isAdmin(user);
 const db        = getDB(Astro);

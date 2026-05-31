@@ -1,11 +1,11 @@
 ---
 import Layout from '../../components/Layout.astro';
 import DistrictNav from '../../components/DistrictNav.astro';
-import { requireUser } from '../../lib/session';
+import { requireSection } from '../../lib/session';
 import { getDB } from '../../lib/db';
 import { formatFecha } from '../../lib/fechas';
 
-requireUser(Astro);
+requireSection(Astro, 'district');
 const db = getDB(Astro);
 
 async function count(sql: string, ...params: any[]): Promise<number> {

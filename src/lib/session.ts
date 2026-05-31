@@ -35,6 +35,51 @@ export function isAdmin(user: SessionUser | null): boolean {
 }
 
 /**
+ * Visibilidad de secciones por rol. Conceptualmente:
+ *   admin   = todo (incluye utilidades / margen / catalogo / pagos).
+ *   editor  = Project Manager. Todo MENOS catalogo de servicios y margen.
+ *   viewer  = Team. Solo modelos, producciones, redes sociales, calendario.
+ *             Sin precios, sin pagos, sin cotizaciones, sin catalogo.
+ *
+ * Devuelve true si el rol del user puede entrar a la seccion dada.
+ */
+const VISIBILIDAD: Record<string, Array<'admin' | 'editor' | 'viewer'>> = {
+  dashboard:    ['admin', 'editor', 'viewer'],
+  modelos:      ['admin', 'editor', 'viewer'],
+  producciones: ['admin', 'editor', 'viewer'],
+  contenido:    ['admin', 'editor', 'viewer'],
+  calendario:   ['admin', 'editor', 'viewer'],
+  tareas:       ['admin', 'editor', 'viewer'],
+
+  clientes:     ['admin', 'editor'],
+  contactos:    ['admin', 'editor'],
+  cotizaciones: ['admin', 'editor'],
+  pagos:        ['admin', 'editor'],
+  castings:     ['admin', 'editor'],
+  briefs:       ['admin', 'editor'],
+  district:     ['admin', 'editor'],
+
+  proveedores:  ['admin'],   // catalogo de servicios solo admin
+  admin:        ['admin'],
+};
+
+export function canViewSection(user: SessionUser | null, section: string): boolean {
+  if (!user) return false;
+  const roles = VISIBILIDAD[section];
+  if (!roles) return true; // si la seccion no esta listada, libre
+  return roles.includes(user.rol as any);
+}
+
+/** Si el user no tiene acceso a la seccion, redirige a dashboard. */
+export function requireSection(context: APIContext | AstroGlobal, section: string): SessionUser {
+  const user = requireUser(context);
+  if (!canViewSection(user, section)) {
+    throw context.redirect('/dashboard');
+  }
+  return user;
+}
+
+/**
  * True si el user puede escribir sobre una marca específica.
  * - admin: todas las marcas.
  * - editor: solo si la marca está en su scope (editor sin scope = todas, retro-compat).

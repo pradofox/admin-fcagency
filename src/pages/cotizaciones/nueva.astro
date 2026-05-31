@@ -1,10 +1,10 @@
 ---
 import Layout from '../../components/Layout.astro';
-import { requireUser, canEdit } from '../../lib/session';
+import { requireSection, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 
-const user = requireUser(Astro);
+const user = requireSection(Astro, 'cotizaciones');
 const editable = canEdit(user);
 const db = getDB(Astro);
 

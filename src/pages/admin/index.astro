@@ -73,7 +73,11 @@ function nombreMarca(mid: string): string {
   </p>
   <div class="card" style="margin-bottom:24px;font-size:12px;line-height:1.7">
     <strong style="color:var(--gold)">Roles:</strong>
-    <span class="text-muted"><b>admin</b> = todo; <b>editor</b> = lee y escribe (limitado a sus marcas si se le asignan; sin marcas = todas); <b>viewer</b> = solo lectura.</span>
+    <span class="text-muted">
+      <b>admin</b> = todo, incluye catálogo de servicios y ganancias.
+      <b>editor</b> (Project Manager) = todo menos catálogo de servicios y ganancias.
+      <b>viewer</b> (Team) = solo dashboard, modelos, producciones, redes sociales, calendario y tareas. No ve precios.
+    </span>
     <br /><span class="text-muted">El scope de marcas se aplica al reiniciar sesión del usuario.</span>
   </div>
 

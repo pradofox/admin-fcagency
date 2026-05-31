@@ -1,22 +1,25 @@
 ---
-import { getUser, isAdmin } from '../lib/session';
+import { getUser, isAdmin, canViewSection } from '../lib/session';
 
 const currentPath = Astro.url.pathname;
 const user = getUser(Astro);
 
+// section = key del helper VISIBILIDAD en lib/session.ts
 const links = [
-  { href: '/dashboard', label: 'Dashboard' },
-  { href: '/modelos', label: 'Modelos' },
-  { href: '/producciones', label: 'Producciones' },
-  { href: '/contenido', label: 'Redes Sociales' },
-  { href: '/clientes', label: 'Clientes' },
-  { href: '/cotizaciones', label: 'Cotizaciones' },
-  { href: '/proveedores', label: 'Catálogo de Servicios' },
-  { href: '/pagos', label: 'Pagos' },
-  { href: '/tareas', label: 'Tareas' },
-  { href: '/calendario', label: 'Calendario' },
-  { href: '/district', label: 'District Studio' }
+  { href: '/dashboard',     section: 'dashboard',    label: 'Dashboard' },
+  { href: '/modelos',       section: 'modelos',      label: 'Modelos' },
+  { href: '/producciones',  section: 'producciones', label: 'Producciones' },
+  { href: '/contenido',     section: 'contenido',    label: 'Redes Sociales' },
+  { href: '/clientes',      section: 'clientes',     label: 'Clientes' },
+  { href: '/cotizaciones',  section: 'cotizaciones', label: 'Cotizaciones' },
+  { href: '/proveedores',   section: 'proveedores',  label: 'Catálogo de Servicios' },
+  { href: '/pagos',         section: 'pagos',        label: 'Pagos' },
+  { href: '/tareas',        section: 'tareas',       label: 'Tareas' },
+  { href: '/calendario',    section: 'calendario',   label: 'Calendario' },
+  { href: '/district',      section: 'district',     label: 'District Studio' },
 ];
+
+const visibles = links.filter((l) => canViewSection(user, l.section));
 
 function isActive(href: string) {
   if (href === '/dashboard') return currentPath === href;
@@ -29,7 +32,7 @@ function isActive(href: string) {
 <aside class="sidebar">
   <div class="sidebar-brand">FC Admin</div>
   <nav class="sidebar-nav">
-    {links.map((l) => (
+    {visibles.map((l) => (
       <a href={l.href} class={`sidebar-link ${isActive(l.href) ? 'active' : ''}`}>{l.label}</a>
     ))}
     {isAdmin(user) && (

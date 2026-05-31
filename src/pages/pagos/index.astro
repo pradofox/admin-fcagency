@@ -1,12 +1,12 @@
 ---
 import Layout from '../../components/Layout.astro';
 import EmptyState from '../../components/EmptyState.astro';
-import { requireUser, canEdit } from '../../lib/session';
+import { requireSection, canEdit } from '../../lib/session';
 import { getDB, now } from '../../lib/db';
 import { newId } from '../../lib/ids';
 import { formatFecha } from '../../lib/fechas';
 
-const user = requireUser(Astro);
+const user = requireSection(Astro, 'pagos');
 const editable = canEdit(user);
 const db = getDB(Astro);
 
@@ -71,6 +71,10 @@ if (Astro.request.method === 'POST' && editable) {
 const tabRaw = Astro.url.searchParams.get('tab');
 const tab = ['cobros', 'pagos', 'pagados'].includes(tabRaw ?? '') ? tabRaw! : 'cobros';
 
+// Buscador por produccion (titulo / cliente)
+const search = (Astro.url.searchParams.get('q') ?? '').trim();
+const searchLike = search ? `%${search}%` : null;
+
 // Flash message de tareas auto-creadas
 const tareasMsgN = Astro.url.searchParams.get('tareas');
 const tareasMsg = tareasMsgN !== null
@@ -79,51 +83,46 @@ const tareasMsg = tareasMsgN !== null
       : '✓ Ingreso registrado.')
   : null;
 
-// ── COBROS ── Producciones con pago de cliente pendiente ─────────────────────
-const { results: cobros } = await db
-  .prepare(
-    `SELECT p.id, p.titulo, p.fecha_inicio, p.estado as prod_estado, p.tipo_produccion,
-            p.pago_cliente_estado,
-            c.nombre as cliente_nombre,
-            SUM(lp.cobro_cliente) as total_cobrar,
-            COUNT(lp.id) as n_lineas
-     FROM producciones p
-     LEFT JOIN clientes c ON c.id = p.cliente_id
-     LEFT JOIN lineas_produccion lp ON lp.produccion_id = p.id AND lp.estado != 'cancelado'
-     WHERE p.pago_cliente_estado = 'pendiente' AND p.estado != 'cancelada'
-     GROUP BY p.id
-     ORDER BY p.fecha_inicio DESC`
-  )
-  .all<any>();
+// Filtro opcional por busqueda (titulo de produccion o nombre del cliente)
+const cobrosSql = `SELECT p.id, p.titulo, p.fecha_inicio, p.estado as prod_estado, p.tipo_produccion,
+                          p.pago_cliente_estado,
+                          c.nombre as cliente_nombre,
+                          SUM(lp.cobro_cliente) as total_cobrar,
+                          COUNT(lp.id) as n_lineas
+                   FROM producciones p
+                   LEFT JOIN clientes c ON c.id = p.cliente_id
+                   LEFT JOIN lineas_produccion lp ON lp.produccion_id = p.id AND lp.estado != 'cancelado'
+                   WHERE p.pago_cliente_estado = 'pendiente' AND p.estado != 'cancelada'
+                     ${searchLike ? 'AND (p.titulo LIKE ? OR c.nombre LIKE ?)' : ''}
+                   GROUP BY p.id
+                   ORDER BY p.fecha_inicio DESC`;
+const cobrosBinds = searchLike ? [searchLike, searchLike] : [];
+const { results: cobros } = await (cobrosBinds.length ? db.prepare(cobrosSql).bind(...cobrosBinds) : db.prepare(cobrosSql)).all<any>();
 
-// ── PAGOS ── Líneas pendientes de pago a proveedores ─────────────────────────
-const { results: pagos } = await db
-  .prepare(
-    `SELECT lp.id as linea_id, lp.nombre_libre, lp.rol, lp.cobro_cliente, lp.pago_proveedor, lp.estado as linea_estado,
-            p.id as prod_id, p.titulo, p.fecha_inicio, p.pago_cliente_estado,
-            c.nombre as cliente_nombre
-     FROM lineas_produccion lp
-     JOIN producciones p ON p.id = lp.produccion_id
-     LEFT JOIN clientes c ON c.id = p.cliente_id
-     WHERE lp.estado = 'pendiente' AND p.estado != 'cancelada'
-     ORDER BY p.pago_cliente_estado ASC, p.fecha_inicio DESC, lp.nombre_libre ASC`
-  )
-  .all<any>();
+const pagosSql = `SELECT lp.id as linea_id, lp.nombre_libre, lp.rol, lp.cobro_cliente, lp.pago_proveedor, lp.estado as linea_estado,
+                         p.id as prod_id, p.titulo, p.fecha_inicio, p.pago_cliente_estado,
+                         c.nombre as cliente_nombre
+                  FROM lineas_produccion lp
+                  JOIN producciones p ON p.id = lp.produccion_id
+                  LEFT JOIN clientes c ON c.id = p.cliente_id
+                  WHERE lp.estado = 'pendiente' AND p.estado != 'cancelada'
+                    ${searchLike ? 'AND (p.titulo LIKE ? OR c.nombre LIKE ? OR lp.nombre_libre LIKE ?)' : ''}
+                  ORDER BY p.pago_cliente_estado ASC, p.fecha_inicio DESC, lp.nombre_libre ASC`;
+const pagosBinds = searchLike ? [searchLike, searchLike, searchLike] : [];
+const { results: pagos } = await (pagosBinds.length ? db.prepare(pagosSql).bind(...pagosBinds) : db.prepare(pagosSql)).all<any>();
 
-// ── PAGADOS ── Líneas ya pagadas ──────────────────────────────────────────────
-const { results: pagados } = await db
-  .prepare(
-    `SELECT lp.id as linea_id, lp.nombre_libre, lp.rol, lp.cobro_cliente, lp.pago_proveedor,
-            p.id as prod_id, p.titulo, p.fecha_inicio,
-            c.nombre as cliente_nombre
-     FROM lineas_produccion lp
-     JOIN producciones p ON p.id = lp.produccion_id
-     LEFT JOIN clientes c ON c.id = p.cliente_id
-     WHERE lp.estado = 'pagado'
-     ORDER BY p.fecha_inicio DESC, lp.nombre_libre ASC
-     LIMIT 100`
-  )
-  .all<any>();
+const pagadosSql = `SELECT lp.id as linea_id, lp.nombre_libre, lp.rol, lp.cobro_cliente, lp.pago_proveedor,
+                           p.id as prod_id, p.titulo, p.fecha_inicio,
+                           c.nombre as cliente_nombre
+                    FROM lineas_produccion lp
+                    JOIN producciones p ON p.id = lp.produccion_id
+                    LEFT JOIN clientes c ON c.id = p.cliente_id
+                    WHERE lp.estado = 'pagado'
+                      ${searchLike ? 'AND (p.titulo LIKE ? OR c.nombre LIKE ? OR lp.nombre_libre LIKE ?)' : ''}
+                    ORDER BY p.fecha_inicio DESC, lp.nombre_libre ASC
+                    LIMIT 100`;
+const pagadosBinds = searchLike ? [searchLike, searchLike, searchLike] : [];
+const { results: pagados } = await (pagadosBinds.length ? db.prepare(pagadosSql).bind(...pagadosBinds) : db.prepare(pagadosSql)).all<any>();
 
 // Totales
 const totalCobrar     = cobros?.reduce((s: number, r: any) => s + (r.total_cobrar ?? 0), 0) ?? 0;
@@ -149,6 +148,16 @@ const fmt = (n: number | null | undefined) =>
     <h1>Cobros y Pagos</h1>
     <a href="/api/pagos/export" class="btn btn-sm">Exportar CSV</a>
   </div>
+
+  {/* Buscador por produccion / cliente */}
+  <form method="GET" action="/pagos" style="display:flex;gap:6px;margin-bottom:16px;align-items:center">
+    {tab && <input type="hidden" name="tab" value={tab} />}
+    <input class="input" type="search" name="q" value={search}
+           placeholder="Buscar por producción, cliente o proveedor…"
+           style="max-width:400px" />
+    <button type="submit" class="btn btn-sm">Buscar</button>
+    {search && <a href={`/pagos?tab=${tab}`} class="btn btn-sm">✕</a>}
+  </form>
 
   {msgOk     && <p class="text-ok"    style="margin-bottom:16px">{msgOk}</p>}
   {tareasMsg && <p class="text-ok"    style="margin-bottom:16px;display:flex;gap:10px;align-items:center">{tareasMsg} <a href="/tareas" class="btn btn-sm">Ver Tareas →</a></p>}
