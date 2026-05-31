@@ -8,7 +8,11 @@ import { formatFecha } from '../../lib/fechas';
 const user = requireUser(Astro);
 const db = getDB(Astro);
 
-const vista = Astro.url.searchParams.get('vista') ?? 'mias';
+const vistaRaw = Astro.url.searchParams.get('vista') ?? 'mias';
+// Solo Admin y PM (editor sin flag district) pueden ver "todas".
+const puedeVerTodas = user.rol === 'admin' || (user.rol === 'editor' && !user.solo_district);
+const vista = (vistaRaw === 'todas' && !puedeVerTodas) ? 'mias' : vistaRaw;
+
 const filtroEstado = Astro.url.searchParams.get('estado') ?? 'activas';
 
 const todayISO = new Date().toISOString().slice(0, 10);
@@ -23,6 +27,7 @@ if (vista === 'mias') {
   where.push('a.asignado_por = ?');
   binds.push(user.id);
 }
+// vista === 'todas': no filtra (ya validado arriba que solo admin/PM puede llegar aqui)
 if (filtroEstado === 'activas') {
   where.push("a.estado IN ('pendiente','en_curso')");
 } else if (filtroEstado === 'completadas') {
@@ -117,7 +122,11 @@ function estadoHref(e: string) {
   <div class="filters" style="margin-bottom:8px">
     <a href={vistaHref('mias')} class={`filter-chip ${vista === 'mias' ? 'active' : ''}`}>mis tareas</a>
     <a href={vistaHref('asignadas')} class={`filter-chip ${vista === 'asignadas' ? 'active' : ''}`}>las que asigné</a>
-    {isAdmin(user) && <a href={vistaHref('todas')} class={`filter-chip ${vista === 'todas' ? 'active' : ''}`}>todas</a>}
+    {/* "Todas las tareas": visible para Admin y Project Manager (editor sin flag district).
+        Team y Encargada District solo ven sus propias tareas y las que asignaron. */}
+    {(user.rol === 'admin' || (user.rol === 'editor' && !user.solo_district)) && (
+      <a href={vistaHref('todas')} class={`filter-chip ${vista === 'todas' ? 'active' : ''}`}>todas</a>
+    )}
   </div>
 
   <div class="filters" style="margin-bottom:24px">
