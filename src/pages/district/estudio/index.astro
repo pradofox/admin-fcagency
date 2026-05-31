@@ -53,8 +53,8 @@ if (Astro.request.method === 'POST' && editable) {
         vencidaMiembroId = miembroId;
         vencidaNombre    = nombreMiembro;
         error = `La membresía de ${vencidaNombre} está vencida.`;
-      } else if (mem.plan_tipo !== 'estudio' && mem.plan_tipo !== 'cowork') {
-        error = `${nombreMiembro} tiene membresía "${mem.plan_nombre}" (${mem.plan_tipo ?? 'sin tipo'}) — el estudio solo es accesible con membresía de estudio o cowork.`;
+      } else if (mem.plan_tipo !== 'estudio' && mem.plan_tipo !== 'mixto') {
+        error = `${nombreMiembro} tiene membresía "${mem.plan_nombre}" (${mem.plan_tipo ?? 'sin tipo'}) — el estudio foto/video SOLO es accesible con membresía de estudio o mixto. Si es de cowork, reserva en la sección de Cowork.`;
       }
     }
 
@@ -122,16 +122,18 @@ const sql = `SELECT r.id, r.fecha, r.hora_inicio, r.hora_fin, r.tipo, r.cliente_
 
 const { results: reservas } = await db.prepare(sql).bind(...binds).all<any>();
 
-// Dropdown con status de membresia y tipo de plan visible
+// Dropdown SOLO con miembros que tengan plan de estudio o mixto. Los de
+// cowork puro no aparecen aqui — el estudio foto/video no se ofrece con
+// esa membresia. Cliente libre (sin membresia) sigue siendo opcion.
 const { results: miembros } = await db
   .prepare(
     `SELECT mi.id, mi.nombre, mi.numero_membresia,
             mb.fecha_proximo_pago as mem_vence,
             p.tipo as plan_tipo, p.nombre as plan_nombre
      FROM miembros_district mi
-     LEFT JOIN membresias_district mb ON mb.miembro_id = mi.id AND mb.estado = 'activa'
-     LEFT JOIN planes_district p ON p.id = mb.plan_id
-     WHERE mi.activo = 1
+     INNER JOIN membresias_district mb ON mb.miembro_id = mi.id AND mb.estado = 'activa'
+     INNER JOIN planes_district p ON p.id = mb.plan_id
+     WHERE mi.activo = 1 AND p.tipo IN ('estudio', 'mixto')
      ORDER BY mi.nombre`
   )
   .all<any>();

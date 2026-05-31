@@ -190,14 +190,23 @@ const fmt = (n: number | null | undefined) =>
     <a href="/api/pagos/export" class="btn btn-sm">Exportar CSV</a>
   </div>
 
-  {/* Buscador por produccion / cliente */}
+  {/* Buscador contextual segun tab activo */}
   <form method="GET" action="/pagos" style="display:flex;gap:6px;margin-bottom:16px;align-items:center">
     {tab && <input type="hidden" name="tab" value={tab} />}
     <input class="input" type="search" name="q" value={search}
-           placeholder="Buscar por producción, cliente o proveedor…"
-           style="max-width:400px" />
+           placeholder={
+             tab === 'cobros'  ? 'Buscar producción o cliente…' :
+             tab === 'pagos'   ? 'Buscar proveedor, producción o cliente…' :
+                                 'Buscar proveedor o producción…'
+           }
+           style="max-width:400px" autofocus />
     <button type="submit" class="btn btn-sm">Buscar</button>
     {search && <a href={`/pagos?tab=${tab}`} class="btn btn-sm">✕</a>}
+    <span class="text-muted" style="font-size:11px;margin-left:auto">
+      {tab === 'cobros'  ? 'En esta pestaña buscas producciones.' :
+       tab === 'pagos'   ? 'En esta pestaña buscas proveedores pendientes de pago.' :
+                           'En esta pestaña buscas proveedores ya pagados.'}
+    </span>
   </form>
 
   {msgOk     && <p class="text-ok"    style="margin-bottom:16px">{msgOk}</p>}

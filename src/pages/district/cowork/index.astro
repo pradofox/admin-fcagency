@@ -38,20 +38,25 @@ if (Astro.request.method === 'POST' && editable) {
   } else if (horaFin <= horaInicio) {
     error = 'La hora de fin debe ser posterior al inicio.';
   } else {
-    // Verificar membresia del miembro si aplica
+    // Verificar membresia del miembro si aplica (solo planes cowork o mixto)
     if (miembroId) {
       const mem = await db
-        .prepare("SELECT id, fecha_proximo_pago FROM membresias_district WHERE miembro_id = ? AND estado = 'activa' LIMIT 1")
+        .prepare(`SELECT mb.id, mb.fecha_proximo_pago, p.tipo as plan_tipo, p.nombre as plan_nombre
+                  FROM membresias_district mb
+                  LEFT JOIN planes_district p ON p.id = mb.plan_id
+                  WHERE mb.miembro_id = ? AND mb.estado = 'activa' LIMIT 1`)
         .bind(miembroId)
         .first<any>();
+      const row = await db.prepare('SELECT nombre FROM miembros_district WHERE id = ?').bind(miembroId).first<any>();
+      const nombreMiembro = row?.nombre ?? 'Este miembro';
       if (!mem) {
-        const row = await db.prepare('SELECT nombre FROM miembros_district WHERE id = ?').bind(miembroId).first<any>();
-        error = `${row?.nombre ?? 'Este miembro'} no tiene membresía activa.`;
+        error = `${nombreMiembro} no tiene membresía activa.`;
       } else if (mem.fecha_proximo_pago < todayISO) {
-        const row = await db.prepare('SELECT nombre FROM miembros_district WHERE id = ?').bind(miembroId).first<any>();
         vencidaMiembroId = miembroId;
-        vencidaNombre    = row?.nombre ?? 'El miembro';
+        vencidaNombre    = nombreMiembro;
         error = `La membresía de ${vencidaNombre} está vencida.`;
+      } else if (mem.plan_tipo !== 'cowork' && mem.plan_tipo !== 'mixto') {
+        error = `${nombreMiembro} tiene membresía "${mem.plan_nombre}" (${mem.plan_tipo ?? 'sin tipo'}) — el cowork SOLO es accesible con membresía de cowork o mixto. Si es de estudio, reserva en la sección de Estudio foto/video.`;
       }
     }
 
@@ -130,13 +135,18 @@ const sql = `SELECT r.id, r.fecha, r.hora_inicio, r.hora_fin, r.tipo, r.espacio,
 
 const { results: reservas } = await db.prepare(sql).bind(...binds).all<any>();
 
+// Dropdown SOLO con miembros que tengan plan de cowork o mixto. Los de
+// estudio puro no aparecen aqui — el cowork no se ofrece con esa
+// membresia. Cliente libre (sin membresia) sigue siendo opcion.
 const { results: miembros } = await db
   .prepare(
     `SELECT mi.id, mi.nombre, mi.numero_membresia,
-            mb.fecha_proximo_pago as mem_vence
+            mb.fecha_proximo_pago as mem_vence,
+            p.tipo as plan_tipo, p.nombre as plan_nombre
      FROM miembros_district mi
-     LEFT JOIN membresias_district mb ON mb.miembro_id = mi.id AND mb.estado = 'activa'
-     WHERE mi.activo = 1
+     INNER JOIN membresias_district mb ON mb.miembro_id = mi.id AND mb.estado = 'activa'
+     INNER JOIN planes_district p ON p.id = mb.plan_id
+     WHERE mi.activo = 1 AND p.tipo IN ('cowork', 'mixto')
      ORDER BY mi.nombre`
   )
   .all<any>();
