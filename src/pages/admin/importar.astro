@@ -1,0 +1,331 @@
+---
+import Layout from '../../components/Layout.astro';
+import { requireAdmin } from '../../lib/session';
+import { getDB, now } from '../../lib/db';
+import { newId } from '../../lib/ids';
+import { logAudit } from '../../lib/audit';
+import { parseCSV, pick, parseNumOrNull, parseFechaIso } from '../../lib/csv';
+
+const user = requireAdmin(Astro);
+const db = getDB(Astro);
+
+interface ResultadoImport {
+  insertadas: number;
+  saltadas: number;
+  errores: string[];
+  ejemplos: string[]; // primeras filas insertadas para confirmar
+}
+
+let resultado: ResultadoImport | null = null;
+let tipoUsado = '';
+let errorGeneral: string | null = null;
+
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const tipo = form.get('tipo') as string;
+  const csvText = (form.get('csv') as string) ?? '';
+  const dryRun = form.get('dry_run') === '1';
+  tipoUsado = tipo;
+
+  let filas: Record<string, string>[] = [];
+  try {
+    filas = parseCSV(csvText);
+  } catch (e: any) {
+    errorGeneral = 'No se pudo parsear el CSV: ' + (e?.message ?? 'error desconocido');
+  }
+
+  if (!errorGeneral && filas.length === 0) {
+    errorGeneral = 'CSV vacío o sin filas válidas. Pega el contenido y vuelve a intentar.';
+  }
+
+  if (!errorGeneral) {
+    resultado = { insertadas: 0, saltadas: 0, errores: [], ejemplos: [] };
+    const ts = now();
+
+    // ── MODELOS ────────────────────────────────────────────────────────────
+    if (tipo === 'modelos') {
+      for (let i = 0; i < filas.length; i++) {
+        const r = filas[i];
+        const nombre = pick(r, 'nombre', 'name', 'nombre completo', 'full name');
+        if (!nombre) { resultado.saltadas++; resultado.errores.push(`Fila ${i+2}: sin nombre`); continue; }
+        const id = newId();
+        const get = (k: string) => { const v = pick(r, k); return v || null; };
+        const getMulti = (...ks: string[]) => { const v = pick(r, ...ks); return v || null; };
+        const getNum  = (k: string) => parseNumOrNull(pick(r, k));
+        const getChk  = (...ks: string[]) => { const v = pick(r, ...ks).toLowerCase(); return ['1','si','sí','yes','true','x','✓'].includes(v) ? 1 : 0; };
+
+        if (!dryRun) {
+          try {
+            await db.prepare(
+              `INSERT INTO modelos (id, nombre, email, whatsapp, instagram, cumpleanos, genero,
+                                    estatura_cm, busto_cm, cintura_cm, cadera_cm, calzado_mx,
+                                    cabello, ojos, ciudad, talentos, notas, estado, polas, book,
+                                    videocasting, drive_folder, created_by, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ).bind(
+              id, nombre,
+              get('email'),
+              getMulti('whatsapp', 'telefono', 'celular', 'phone'),
+              getMulti('instagram', 'ig', 'usuario'),
+              getMulti('cumpleanos', 'cumpleaños', 'fecha nacimiento', 'birthday', 'nacimiento'),
+              getMulti('genero', 'género', 'sexo'),
+              getNum('estatura_cm') ?? parseNumOrNull(pick(r, 'estatura', 'altura')),
+              getNum('busto_cm')   ?? parseNumOrNull(pick(r, 'busto')),
+              getNum('cintura_cm') ?? parseNumOrNull(pick(r, 'cintura')),
+              getNum('cadera_cm')  ?? parseNumOrNull(pick(r, 'cadera')),
+              getNum('calzado_mx') ?? parseNumOrNull(pick(r, 'calzado', 'zapato')),
+              getMulti('cabello', 'pelo', 'hair'),
+              getMulti('ojos', 'eyes'),
+              getMulti('ciudad', 'city'),
+              getMulti('talentos', 'habilidades', 'skills'),
+              get('notas') || get('comentarios'),
+              (pick(r, 'estado', 'status').toLowerCase() || 'activo'),
+              getChk('polas'),
+              getChk('book'),
+              getChk('videocasting', 'video casting', 'video'),
+              getMulti('drive_folder', 'drive', 'folder', 'carpeta'),
+              user.id, ts, ts
+            ).run();
+            resultado.insertadas++;
+            if (resultado.ejemplos.length < 3) resultado.ejemplos.push(nombre);
+          } catch (e: any) {
+            resultado.saltadas++;
+            resultado.errores.push(`Fila ${i+2} (${nombre}): ${e?.message ?? 'error al insertar'}`);
+          }
+        } else {
+          resultado.insertadas++;
+          if (resultado.ejemplos.length < 5) resultado.ejemplos.push(nombre);
+        }
+      }
+    }
+
+    // ── PRODUCCIONES ───────────────────────────────────────────────────────
+    else if (tipo === 'producciones') {
+      // Precarga: mapa de cliente por nombre para resolver FK opcional
+      const { results: clientes } = await db.prepare('SELECT id, nombre FROM clientes').all<{ id: string; nombre: string }>();
+      const clienteMap = new Map((clientes ?? []).map((c) => [c.nombre.toLowerCase(), c.id]));
+
+      for (let i = 0; i < filas.length; i++) {
+        const r = filas[i];
+        const titulo = pick(r, 'titulo', 'título', 'title', 'nombre', 'proyecto');
+        if (!titulo) { resultado.saltadas++; resultado.errores.push(`Fila ${i+2}: sin titulo`); continue; }
+        const id = newId();
+        const clienteNombre = pick(r, 'cliente', 'client');
+        const clienteId = clienteNombre ? clienteMap.get(clienteNombre.toLowerCase()) ?? null : null;
+        const fechaInicio = parseFechaIso(pick(r, 'fecha_inicio', 'fecha inicio', 'fecha', 'date', 'start'));
+        const fechaFin    = parseFechaIso(pick(r, 'fecha_fin', 'fecha fin', 'end'));
+        const presup      = parseNumOrNull(pick(r, 'presupuesto', 'budget', 'cobro', 'total'));
+        const estado      = (pick(r, 'estado', 'status').toLowerCase() || 'planeacion');
+        const estadoOk    = ['planeacion','confirmada','en_curso','completada','cancelada'].includes(estado) ? estado : 'planeacion';
+
+        if (!dryRun) {
+          try {
+            await db.prepare(
+              `INSERT INTO producciones (id, titulo, cliente_id, fecha_inicio, fecha_fin, ubicacion,
+                                         estado, presupuesto, notas, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ).bind(
+              id, titulo, clienteId, fechaInicio, fechaFin,
+              pick(r, 'ubicacion', 'lugar', 'location') || null,
+              estadoOk, presup,
+              pick(r, 'notas', 'notes', 'comentarios') || null,
+              ts, ts
+            ).run();
+            resultado.insertadas++;
+            if (resultado.ejemplos.length < 3) resultado.ejemplos.push(titulo);
+          } catch (e: any) {
+            resultado.saltadas++;
+            resultado.errores.push(`Fila ${i+2} (${titulo}): ${e?.message ?? 'error'}`);
+          }
+        } else {
+          resultado.insertadas++;
+          if (resultado.ejemplos.length < 5) resultado.ejemplos.push(titulo);
+        }
+      }
+    }
+
+    // ── PAGOS ──────────────────────────────────────────────────────────────
+    // Cada fila = pago a UN proveedor de UNA produccion. Crea una linea de
+    // produccion ya marcada como 'pagado'. Si no existe la produccion la crea.
+    else if (tipo === 'pagos') {
+      const { results: prods } = await db.prepare('SELECT id, titulo FROM producciones').all<{ id: string; titulo: string }>();
+      const prodMap = new Map((prods ?? []).map((p) => [p.titulo.toLowerCase(), p.id]));
+
+      for (let i = 0; i < filas.length; i++) {
+        const r = filas[i];
+        const tituloProd = pick(r, 'produccion', 'producción', 'proyecto', 'titulo', 'título');
+        const proveedor  = pick(r, 'proveedor', 'beneficiario', 'pagado a', 'nombre', 'modelo');
+        const monto      = parseNumOrNull(pick(r, 'monto', 'pago', 'amount', 'total', 'pagado'));
+        const cobroCli   = parseNumOrNull(pick(r, 'cobro_cliente', 'cobrado', 'cobro')) ?? monto;
+        const rol        = pick(r, 'rol', 'role', 'puesto', 'concepto') || null;
+
+        if (!tituloProd || !proveedor) { resultado.saltadas++; resultado.errores.push(`Fila ${i+2}: falta produccion o proveedor`); continue; }
+        if (monto == null) { resultado.saltadas++; resultado.errores.push(`Fila ${i+2}: monto invalido`); continue; }
+
+        // Resolver o crear la produccion
+        let prodId = prodMap.get(tituloProd.toLowerCase());
+        if (!prodId && !dryRun) {
+          prodId = newId();
+          const fechaProd = parseFechaIso(pick(r, 'fecha_inicio', 'fecha', 'date')) ?? new Date().toISOString().slice(0,10);
+          await db.prepare(
+            `INSERT INTO producciones (id, titulo, fecha_inicio, estado, pago_cliente_estado, created_at, updated_at)
+             VALUES (?, ?, ?, 'completada', 'pagado', ?, ?)`
+          ).bind(prodId, tituloProd, fechaProd, ts, ts).run();
+          prodMap.set(tituloProd.toLowerCase(), prodId);
+        }
+
+        if (!dryRun && prodId) {
+          try {
+            await db.prepare(
+              `INSERT INTO lineas_produccion (id, produccion_id, nombre_libre, rol, cobro_cliente, pago_proveedor, estado, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'pagado', ?)`
+            ).bind(newId(), prodId, proveedor, rol, cobroCli, monto, ts).run();
+            resultado.insertadas++;
+            if (resultado.ejemplos.length < 3) resultado.ejemplos.push(`${proveedor} ($${monto}) — ${tituloProd}`);
+          } catch (e: any) {
+            resultado.saltadas++;
+            resultado.errores.push(`Fila ${i+2}: ${e?.message ?? 'error'}`);
+          }
+        } else {
+          resultado.insertadas++;
+          if (resultado.ejemplos.length < 5) resultado.ejemplos.push(`${proveedor} ($${monto}) — ${tituloProd}`);
+        }
+      }
+    }
+
+    else {
+      errorGeneral = 'Tipo de import desconocido.';
+    }
+
+    if (!dryRun && resultado && resultado.insertadas > 0) {
+      await logAudit(db, { user, accion: 'create', entidad: tipo === 'modelos' ? 'modelo' : tipo === 'producciones' ? 'produccion' : 'pago',
+        entidad_id: null, entidad_label: `Import CSV (${resultado.insertadas} filas)`,
+        payload: { tipo, insertadas: resultado.insertadas, saltadas: resultado.saltadas } });
+    }
+  }
+}
+
+// Texto de ayuda por tipo
+const tipoActual = (Astro.url.searchParams.get('tipo') || tipoUsado || 'modelos') as string;
+---
+
+<Layout title="Importar CSV" pageTitle="Importar desde CSV">
+  <div class="page-head">
+    <div>
+      <h1>Importar desde CSV</h1>
+      <small class="text-muted">Carga datos viejos (modelos, producciones, pagos) desde un export de la plataforma anterior.</small>
+    </div>
+    <a href="/admin" class="btn btn-sm">← Admin</a>
+  </div>
+
+  {/* Tabs por tipo */}
+  <div class="filters" style="margin-bottom:18px">
+    {[
+      { v: 'modelos',      label: 'Modelos / Talento' },
+      { v: 'producciones', label: 'Producciones' },
+      { v: 'pagos',        label: 'Pagos' },
+    ].map((t) => (
+      <a href={`/admin/importar?tipo=${t.v}`}
+         class={`filter-chip ${tipoActual === t.v ? 'active' : ''}`}>{t.label}</a>
+    ))}
+  </div>
+
+  {/* Ayuda de columnas */}
+  <details style="background:var(--bg-2);border:1px solid var(--border);padding:14px;margin-bottom:18px" open>
+    <summary style="cursor:pointer;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold)">
+      Columnas que reconoce el importador {tipoActual}
+    </summary>
+    <div class="text-muted" style="font-size:12px;line-height:1.7;margin-top:10px">
+      {tipoActual === 'modelos' && (
+        <div>
+          <strong>Obligatoria:</strong> <code>nombre</code> (o "name", "nombre completo")<br />
+          <strong>Opcionales:</strong> email, whatsapp (o teléfono/celular/phone), instagram (o ig/usuario),
+          cumpleanos (o "cumpleaños", "fecha nacimiento", "birthday"), genero (o "género"/sexo),
+          estatura_cm (o estatura/altura), busto_cm, cintura_cm, cadera_cm, calzado_mx (o calzado/zapato),
+          cabello (o pelo/hair), ojos, ciudad, talentos (o habilidades/skills), notas,
+          estado (activo/pausa/aspirante/archivado), polas, book, videocasting, drive_folder<br />
+          <strong>Para checkboxes</strong> (polas/book/videocasting): acepta <code>1</code>, <code>si</code>, <code>yes</code>, <code>x</code>, <code>true</code>.
+        </div>
+      )}
+      {tipoActual === 'producciones' && (
+        <div>
+          <strong>Obligatoria:</strong> <code>titulo</code> (o "título"/title/nombre/proyecto)<br />
+          <strong>Opcionales:</strong> cliente (intenta matchear contra clientes existentes por nombre),
+          fecha_inicio (acepta DD/MM/YYYY, YYYY-MM-DD, etc.), fecha_fin, ubicacion (o lugar),
+          presupuesto (o budget/cobro/total), estado (planeacion/confirmada/en_curso/completada/cancelada), notas
+        </div>
+      )}
+      {tipoActual === 'pagos' && (
+        <div>
+          <strong>Obligatorias:</strong> <code>produccion</code> (o "proyecto"/título) y <code>proveedor</code> (o "beneficiario"/modelo) y <code>monto</code> (o pago/amount)<br />
+          <strong>Opcionales:</strong> cobro_cliente (cobrado al cliente; si falta usa monto), rol (concepto/puesto), fecha_inicio<br />
+          Si la producción del título no existe, se crea automáticamente como <strong>completada</strong> y <strong>pagada por el cliente</strong>.
+          Cada fila se inserta como una <code>lineas_produccion</code> ya marcada <strong>pagado</strong>.
+        </div>
+      )}
+    </div>
+  </details>
+
+  {errorGeneral && <p class="text-danger" style="margin-bottom:14px">{errorGeneral}</p>}
+
+  {resultado && (
+    <div class="card" style={`margin-bottom:18px;border-left:3px solid ${resultado.insertadas > 0 ? 'var(--text-ok,#4ade80)' : 'var(--danger,#e25555)'}`}>
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <strong>{tipoUsado}: {resultado.insertadas} {resultado.insertadas === 1 ? 'fila' : 'filas'} importada{resultado.insertadas !== 1 ? 's' : ''}</strong>
+        {resultado.saltadas > 0 && <span class="text-danger" style="font-size:12px">{resultado.saltadas} saltada{resultado.saltadas !== 1 ? 's' : ''}</span>}
+      </div>
+      {resultado.ejemplos.length > 0 && (
+        <div class="text-muted" style="font-size:12px;margin-top:6px">
+          Ejemplos: {resultado.ejemplos.join(' · ')}
+        </div>
+      )}
+      {resultado.errores.length > 0 && (
+        <details style="margin-top:10px">
+          <summary class="text-danger" style="cursor:pointer;font-size:12px">Ver {resultado.errores.length} error{resultado.errores.length !== 1 ? 'es' : ''}</summary>
+          <ul style="font-size:11px;margin-top:6px;color:var(--text-2);max-height:200px;overflow:auto">
+            {resultado.errores.slice(0, 50).map((e) => <li>{e}</li>)}
+          </ul>
+        </details>
+      )}
+    </div>
+  )}
+
+  <form method="POST" action="/admin/importar" id="form_import">
+    <input type="hidden" name="tipo" value={tipoActual} />
+
+    <label class="label">1) Sube tu archivo CSV (o pega abajo)</label>
+    <input type="file" accept=".csv,text/csv" id="file_csv"
+           style="margin-bottom:14px;padding:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:4px;width:100%" />
+
+    <label class="label">2) Verifica el contenido</label>
+    <textarea class="textarea" name="csv" id="ta_csv" rows="14" required
+              placeholder={`Pega aquí el contenido del CSV. Primera línea = headers.\n\nEjemplo modelos:\nnombre,email,whatsapp,instagram,ciudad\nAna García,ana@x.com,8181234567,@ana.gar,Monterrey`}
+              style="font-family:var(--font-mono);font-size:11px"></textarea>
+
+    <div style="display:flex;gap:8px;margin-top:14px;align-items:center">
+      <button type="submit" name="dry_run" value="1" class="btn">Probar (no inserta nada)</button>
+      <button type="submit" class="btn btn-primary"
+              onclick="return confirm('¿Importar las filas ahora? Esta acción NO se puede deshacer fácilmente.')">
+        Importar
+      </button>
+      <span class="text-muted" style="font-size:11px;margin-left:auto">
+        Se loggea en auditoría con tu usuario.
+      </span>
+    </div>
+  </form>
+
+  <script is:inline>
+    // Carga el contenido del file input al textarea para preview/edit
+    const f = document.getElementById('file_csv');
+    const ta = document.getElementById('ta_csv');
+    if (f && ta) {
+      f.addEventListener('change', function (e) {
+        const file = (e.target).files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function () { ta.value = String(reader.result || ''); };
+        reader.readAsText(file);
+      });
+    }
+  </script>
+</Layout>

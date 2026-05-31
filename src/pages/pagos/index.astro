@@ -39,6 +39,30 @@ if (Astro.request.method === 'POST' && editable) {
     }
   }
 
+  // ── Revertir pago a proveedor (volver a pendiente por si fue por error) ──
+  if (action === 'revertir_pago_linea') {
+    const lineaId = form.get('linea_id') as string;
+    const linea = await db
+      .prepare(`SELECT lp.id, p.titulo FROM lineas_produccion lp JOIN producciones p ON p.id = lp.produccion_id WHERE lp.id = ?`)
+      .bind(lineaId).first<any>();
+    if (linea) {
+      await db.prepare("UPDATE lineas_produccion SET estado = 'pendiente' WHERE id = ?").bind(lineaId).run();
+      await logAudit(db, { user, accion: 'state_change', entidad: 'pago', entidad_id: lineaId, entidad_label: linea.titulo, payload: { estado: 'pendiente', motivo: 'revertido' } });
+    }
+    return Astro.redirect('/pagos?tab=pagados');
+  }
+
+  // ── Revertir cobro de cliente (produccion vuelve a pendiente) ────────────
+  if (action === 'revertir_cliente_pago') {
+    const prodId = form.get('prod_id') as string;
+    const prod = await db.prepare('SELECT titulo FROM producciones WHERE id = ?').bind(prodId).first<any>();
+    if (prod) {
+      await db.prepare("UPDATE producciones SET pago_cliente_estado = 'pendiente', updated_at = ? WHERE id = ?").bind(now(), prodId).run();
+      await logAudit(db, { user, accion: 'state_change', entidad: 'produccion', entidad_id: prodId, entidad_label: prod.titulo, payload: { pago_cliente_estado: 'pendiente', motivo: 'revertido' } });
+    }
+    return Astro.redirect('/pagos?tab=cobros');
+  }
+
   if (action === 'cliente_pago') {
     const prodId = form.get('prod_id') as string;
     const ts = now();
@@ -101,6 +125,20 @@ const cobrosSql = `SELECT p.id, p.titulo, p.fecha_inicio, p.estado as prod_estad
                    ORDER BY p.fecha_inicio DESC`;
 const cobrosBinds = searchLike ? [searchLike, searchLike] : [];
 const { results: cobros } = await (cobrosBinds.length ? db.prepare(cobrosSql).bind(...cobrosBinds) : db.prepare(cobrosSql)).all<any>();
+
+// Producciones recientemente cobradas (para poder revertir si fue por error)
+const cobradasSql = `SELECT p.id, p.titulo, p.fecha_inicio, c.nombre as cliente_nombre,
+                            SUM(lp.cobro_cliente) as total
+                     FROM producciones p
+                     LEFT JOIN clientes c ON c.id = p.cliente_id
+                     LEFT JOIN lineas_produccion lp ON lp.produccion_id = p.id AND lp.estado != 'cancelado'
+                     WHERE p.pago_cliente_estado = 'pagado' AND p.estado != 'cancelada'
+                       ${searchLike ? 'AND (p.titulo LIKE ? OR c.nombre LIKE ?)' : ''}
+                     GROUP BY p.id
+                     ORDER BY p.updated_at DESC
+                     LIMIT 30`;
+const cobradasBinds = searchLike ? [searchLike, searchLike] : [];
+const { results: cobradas } = await (cobradasBinds.length ? db.prepare(cobradasSql).bind(...cobradasBinds) : db.prepare(cobradasSql)).all<any>();
 
 const pagosSql = `SELECT lp.id as linea_id, lp.nombre_libre, lp.rol, lp.cobro_cliente, lp.pago_proveedor, lp.estado as linea_estado,
                          p.id as prod_id, p.titulo, p.fecha_inicio, p.pago_cliente_estado,
@@ -216,7 +254,8 @@ const fmt = (n: number | null | undefined) =>
   </div>
 
   {tab === 'cobros' && (
-    cobros && cobros.length > 0 ? (
+    <>
+    {(cobros && cobros.length > 0) ? (
       <div>
         {cobros.map((r: any) => (
           <div class="card" style="margin-bottom:10px;border-left:3px solid #e9b949">
@@ -252,7 +291,43 @@ const fmt = (n: number | null | undefined) =>
       </div>
     ) : (
       <EmptyState title="Sin cobros pendientes" message="Todas las producciones tienen el pago del cliente al día." />
-    )
+    )}
+
+    {cobradas && cobradas.length > 0 && (
+      <details style="margin-top:24px">
+        <summary class="text-muted" style="cursor:pointer;font-size:11px;letter-spacing:.15em;text-transform:uppercase">
+          Producciones ya cobradas ({cobradas.length}) — revertir si fue por error
+        </summary>
+        <div class="table-card" style="margin-top:10px">
+          <table>
+            <thead>
+              <tr><th>Producción</th><th>Cliente</th><th>Fecha</th><th class="right">Total</th><th></th></tr>
+            </thead>
+            <tbody>
+              {(cobradas as any[]).map((r) => (
+                <tr>
+                  <td><a href={`/producciones/${r.id}`} style="color:inherit;font-weight:500">{r.titulo}</a></td>
+                  <td class="text-muted">{r.cliente_nombre ?? '—'}</td>
+                  <td class="mono text-muted">{formatFecha(r.fecha_inicio)}</td>
+                  <td class="right mono text-ok">{fmt(r.total)}</td>
+                  <td>
+                    {editable && (
+                      <form method="POST" action="/pagos" style="display:inline"
+                            onsubmit="return confirm('¿Marcar esta producción como NO cobrada otra vez? Vuelve a aparecer en cobros pendientes.')">
+                        <input type="hidden" name="_action" value="revertir_cliente_pago" />
+                        <input type="hidden" name="prod_id" value={r.id} />
+                        <button type="submit" class="btn btn-sm">↩ Pendiente</button>
+                      </form>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    )}
+    </>
   )}
 
   {tab === 'pagados' && (
@@ -263,7 +338,7 @@ const fmt = (n: number | null | undefined) =>
             <thead>
               <tr>
                 <th>Proveedor</th><th>Rol</th><th>Producción</th><th>Cliente</th>
-                <th class="right">Cobrado</th><th class="right">Pagado</th>
+                <th class="right">Cobrado</th><th class="right">Pagado</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -275,12 +350,22 @@ const fmt = (n: number | null | undefined) =>
                   <td class="text-muted">{r.cliente_nombre ?? '—'}</td>
                   <td class="right mono">{fmt(r.cobro_cliente)}</td>
                   <td class="right mono text-ok">{fmt(r.pago_proveedor)}</td>
+                  <td style="white-space:nowrap">
+                    {editable && (
+                      <form method="POST" action="/pagos" style="display:inline"
+                            onsubmit="return confirm('¿Regresar este pago a pendiente? Lo verás otra vez en la pestaña Pagos por hacer.')">
+                        <input type="hidden" name="_action" value="revertir_pago_linea" />
+                        <input type="hidden" name="linea_id" value={r.linea_id} />
+                        <button type="submit" class="btn btn-sm" title="Marcar como pendiente">↩ Pendiente</button>
+                      </form>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <p class="text-muted" style="font-size:12px;margin-top:8px">Mostrando últimos {pagados.length} pagos completados.</p>
+        <p class="text-muted" style="font-size:12px;margin-top:8px">Mostrando últimos {pagados.length} pagos completados. Usa ↩ Pendiente si marcaste por error.</p>
       </div>
     ) : (
       <EmptyState title="Sin pagos completados" message="Aún no se ha registrado ningún pago a proveedor." />
